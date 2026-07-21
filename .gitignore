@@ -40,8 +40,9 @@ results/
 report/
 logs/
 
-# Papers (separate)
-papers/
+# Papers: keep the lightweight catalog in Git, ignore local source documents
+papers/*
+!papers/references_and_analysis.md
 
 # OS files
 .DS_Store
