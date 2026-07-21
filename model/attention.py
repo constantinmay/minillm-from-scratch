@@ -71,6 +71,7 @@ class CausalSelfAttention(nn.Module):
         self.k_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.o_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.o_proj._is_residual = True
 
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)

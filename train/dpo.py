@@ -129,22 +129,27 @@ class DPODataset(Dataset):
 
     def _tokenize_pair(self, prompt, response):
         """Tokenize a prompt+response pair, returning input_ids and labels."""
-        full_text = prompt + " " + response
+        prompt_ids = self.tokenizer.encode(
+            prompt.strip() + " ", add_special_tokens=False
+        )
+        response_ids = self.tokenizer.encode(
+            response.strip(), add_special_tokens=False
+        )
+        prompt_ids = prompt_ids[: max(0, self.max_length - 1)]
 
-        prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
-        full_ids = self.tokenizer.encode(full_text, add_special_tokens=True)
+        full_ids = (
+            [self.tokenizer.bos_id()]
+            + prompt_ids
+            + response_ids
+            + [self.tokenizer.eos_id()]
+        )
+        full_ids = full_ids[: self.max_length + 1]
 
-        # Truncate
-        if len(full_ids) > self.max_length:
-            full_ids = full_ids[: self.max_length]
-
-        input_ids = torch.tensor(full_ids, dtype=torch.long)
-
-        # Labels with -100 for prompt portion (1 for <bos> + len(prompt_ids))
-        prompt_len = min(1 + len(prompt_ids), len(full_ids))
-        labels = list(full_ids)
-        for i in range(prompt_len):
-            labels[i] = -100
+        # Causal next-token alignment.  Response labels are retained while the
+        # shifted targets that still belong to the prompt are ignored.
+        input_ids = torch.tensor(full_ids[:-1], dtype=torch.long)
+        labels = full_ids[1:]
+        labels[: len(prompt_ids)] = [-100] * len(prompt_ids)
         labels = torch.tensor(labels, dtype=torch.long)
 
         return input_ids, labels

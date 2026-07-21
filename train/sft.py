@@ -31,6 +31,27 @@ from train.common import (
 SFT_TEMPLATE = "{prompt} {response}"  # No instruction prefix - pure story continuation
 
 
+def build_pretrain_targets(input_ids, response_labels):
+    """Restore next-token targets for prompt tokens while keeping padding masked.
+
+    ``response_labels`` already contains shifted response/EOS targets and uses
+    -100 both for the prompt prefix and batch padding.  Only the masked prefix
+    before the first response target should be restored for the auxiliary
+    language-modeling loss; trailing padding must remain ignored.
+    """
+    targets = response_labels.clone()
+    for row in range(targets.size(0)):
+        valid = (response_labels[row] != -100).nonzero(as_tuple=False)
+        if valid.numel() == 0:
+            continue
+        first_response_pos = int(valid[0].item())
+        if first_response_pos > 0:
+            targets[row, :first_response_pos] = input_ids[
+                row, 1 : first_response_pos + 1
+            ]
+    return targets
+
+
 class SFTDataset(Dataset):
     """Supervised Fine-Tuning dataset.
 
@@ -71,17 +92,20 @@ class SFTDataset(Dataset):
         prompt_ids = self.tokenizer.encode(prompt + " ", add_special_tokens=False)
         response_ids = self.tokenizer.encode(response, add_special_tokens=False)
 
-        # Manually concatenate: <bos> + prompt_tokens + response_tokens + <eos>
-        input_ids = [bos_id] + prompt_ids + response_ids + [eos_id]
-        labels = [-100] * (1 + len(prompt_ids)) + list(response_ids) + [eos_id]
+        # Reserve one target position for the response (or EOS) even when the
+        # prompt is longer than the context window.
+        prompt_ids = prompt_ids[: max(0, self.max_length - 1)]
 
-        # Truncate
-        input_ids = input_ids[: self.max_length]
-        labels = labels[: self.max_length]
+        # Build a sequence with one extra token, then shift it into causal-LM
+        # inputs and targets: input[t] predicts full_ids[t + 1].
+        full_ids = [bos_id] + prompt_ids + response_ids + [eos_id]
+        full_ids = full_ids[: self.max_length + 1]
+        input_ids = full_ids[:-1]
+        labels = full_ids[1:]
 
-        # Protect: if response was fully truncated, at least learn the last token
-        if all(x == -100 for x in labels):
-            labels[-1] = input_ids[-1]
+        # The first response token is predicted after the final prompt token.
+        # Therefore exactly len(prompt_ids) target positions belong to prompt.
+        labels[: len(prompt_ids)] = [-100] * len(prompt_ids)
 
         return torch.tensor(input_ids, dtype=torch.long), torch.tensor(labels, dtype=torch.long)
 
@@ -200,6 +224,7 @@ def train_sft(config_path: str):
     eval_every = cfg.get("eval_every", 200)
     checkpoint_dir = cfg.get("checkpoint_dir", "checkpoints")
     checkpoint_name = cfg.get("checkpoint_name", "sft.pt")
+    checkpoint_stem = os.path.splitext(checkpoint_name)[0]
 
     os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -229,7 +254,8 @@ def train_sft(config_path: str):
 
             # Pretrain loss: on ALL tokens (no masking)
             if pretrain_weight > 0:
-                pretrain_result = model(input_ids, targets=input_ids)
+                pretrain_targets = build_pretrain_targets(input_ids, labels)
+                pretrain_result = model(input_ids, targets=pretrain_targets)
                 pretrain_loss = pretrain_result["loss"]
                 loss = (sft_loss + pretrain_weight * pretrain_loss) / grad_accum_steps
             else:
@@ -266,7 +292,9 @@ def train_sft(config_path: str):
 
         # Save checkpoint
         if step % save_every == 0:
-            ckpt_path = os.path.join(checkpoint_dir, f"sft_step_{step}.pt")
+            ckpt_path = os.path.join(
+                checkpoint_dir, f"{checkpoint_stem}_step_{step}.pt"
+            )
             save_checkpoint(model, optimizer, scheduler, step, ckpt_path, model_config)
             pbar.write(f"Checkpoint saved: {ckpt_path}")
 

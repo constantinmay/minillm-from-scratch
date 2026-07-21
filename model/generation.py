@@ -98,27 +98,25 @@ def generate_batch(
     model.eval()
     encoded = tokenizer.encode_batch(prompts)
 
-    max_prompt_len = max(len(t) for t in encoded)
-    padded = []
-    for tokens in encoded:
-        pad_len = max_prompt_len - len(tokens)
-        padded.append([tokenizer.pad_id()] * pad_len + tokens)
-
-    input_ids = torch.tensor(padded, dtype=torch.long, device=device)
-
-    output_ids = generate(
-        model, input_ids,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_k=top_k,
-        top_p=top_p,
-        eos_token_id=tokenizer.eos_id(),
-    )
-
+    # The model has no padding attention mask.  Left-padding variable-length
+    # prompts would therefore change their context and also offset continuation
+    # slicing.  Generate each prompt independently for correctness.
     results = []
-    for i, prompt_tokens in enumerate(encoded):
+    for prompt_tokens in encoded:
+        input_ids = torch.tensor(
+            [prompt_tokens], dtype=torch.long, device=device
+        )
+        output_ids = generate(
+            model,
+            input_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            eos_token_id=tokenizer.eos_id(),
+        )
         prompt_len = len(prompt_tokens)
-        generated = output_ids[i, prompt_len:].tolist()
+        generated = output_ids[0, prompt_len:].tolist()
         text = tokenizer.decode(generated, skip_special_tokens=True)
         results.append(text)
 

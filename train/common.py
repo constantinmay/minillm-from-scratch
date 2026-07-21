@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import torch
 import torch.nn as nn
+import math
 from typing import Dict, Any, Tuple, Optional
 import json
 import yaml
@@ -59,14 +60,24 @@ def create_scheduler(optimizer, max_steps, warmup_steps, max_lr, min_lr):
     warmup_steps = int(warmup_steps)
     max_steps = int(max_steps)
 
+    if max_steps <= 0:
+        raise ValueError("max_steps must be positive")
+    if warmup_steps < 0:
+        raise ValueError("warmup_steps must be non-negative")
+    if max_lr <= 0 or not 0 <= min_lr <= max_lr:
+        raise ValueError("learning rates must satisfy 0 <= min_lr <= max_lr")
+
+    min_lr_ratio = min_lr / max_lr
+
     def lr_lambda(step):
         if step < warmup_steps:
             return step / max(1, warmup_steps)
         else:
             progress = (step - warmup_steps) / max(1, max_steps - warmup_steps)
             progress = min(progress, 1.0)
-            cosine_decay = 0.5 * (1.0 + torch.cos(torch.tensor(3.14159265 * progress)).item())
-            return min_lr + (max_lr - min_lr) * cosine_decay / max_lr
+            cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+            # LambdaLR expects a multiplier, not an absolute learning rate.
+            return min_lr_ratio + (1.0 - min_lr_ratio) * cosine_decay
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     return scheduler

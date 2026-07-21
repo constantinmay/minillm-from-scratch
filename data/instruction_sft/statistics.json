@@ -1,0 +1,63 @@
+{
+  "seed": 42,
+  "task_ratios": {
+    "continuation": 0.35,
+    "keyword_story": 0.25,
+    "sentence_count": 0.2,
+    "question_answering": 0.2
+  },
+  "source_overlaps": {
+    "train_valid": 0,
+    "train_test": 0,
+    "valid_test": 0
+  },
+  "splits": {
+    "train": {
+      "total": 20000,
+      "tasks": {
+        "continuation": 7000,
+        "question_answering": 4000,
+        "sentence_count": 4000,
+        "keyword_story": 5000
+      },
+      "unique_sources": 15961,
+      "average_response_words": 20.26,
+      "min_response_words": 1,
+      "max_response_words": 89
+    },
+    "valid": {
+      "total": 1000,
+      "tasks": {
+        "question_answering": 200,
+        "continuation": 350,
+        "keyword_story": 250,
+        "sentence_count": 200
+      },
+      "unique_sources": 867,
+      "average_response_words": 20.82,
+      "min_response_words": 1,
+      "max_response_words": 74
+    },
+    "test": {
+      "total": 1000,
+      "tasks": {
+        "continuation": 350,
+        "keyword_story": 250,
+        "question_answering": 200,
+        "sentence_count": 200
+      },
+      "unique_sources": 882,
+      "average_response_words": 20.67,
+      "min_response_words": 1,
+      "max_response_words": 77
+    }
+  },
+  "rejected_candidates": {
+    "continuation:not_constructible": 4897,
+    "keyword_story:missing_keyword": 7,
+    "keyword_story:not_constructible": 3567,
+    "question_answering:not_constructible": 15352,
+    "question_answering:ungrounded_answer": 5,
+    "sentence_count:not_constructible": 5094
+  }
+}

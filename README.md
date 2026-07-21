@@ -109,12 +109,73 @@ Trains the base model with next-token prediction. Expected: eval loss drops from
 ### Step 5: SFT (Supervised Fine-Tuning)
 
 ```bash
-# Build SFT data (story continuation pairs)
-python scripts/build_sft_data.py --input data/raw/TinyStories-valid.txt --output data/sft_v2/train.jsonl --num_samples 500
+# Build leakage-safe TinyStories instruction data
+python scripts/build_instruction_sft.py
 
 # Train
 python train/sft.py --config configs/train_sft.yaml
 ```
+
+The instruction builder creates 20,000 training, 1,000 validation, and 1,000
+test examples across four objectively checkable tasks: continuation (35%),
+required-keyword continuation (25%), exact sentence count (20%), and
+extractive question answering (20%).  Training and evaluation source stories
+are separate, validation/test passages are grouped before splitting, and test
+instructions use held-out paraphrases.  Every example is checked against the
+256-token context limit and its task-specific constraints.  Dataset metadata
+and construction statistics are saved to
+`data/instruction_sft/statistics.json`.
+
+The stable plain-text format avoids changing the pretrained tokenizer:
+
+```text
+Instruction: Continue the story in exactly 2 sentences.
+Input: Lily found a little bird in the garden.
+Response: The bird was cold. Lily took it home.
+```
+
+Only response tokens contribute to the primary SFT loss.  The default config
+runs 7,500 microsteps (1,875 optimizer updates at accumulation 4), which is
+approximately three passes over 20,000 examples at batch size 8.
+
+For a fair single-task control with the same format, size, and training budget:
+
+```bash
+python scripts/build_instruction_sft.py \
+  --output-dir data/instruction_sft_continuation \
+  --task-mix continuation_only
+python train/sft.py --config configs/train_sft_continuation.yaml
+```
+
+### Instruction-aligned DPO and RSFT
+
+After instruction SFT, generate one balanced candidate pool and derive both
+DPO pairs and hard-pass RSFT targets from it:
+
+```bash
+python scripts/build_instruction_alignment.py
+
+# If a time-limited job stops, retain completed prompts:
+python scripts/build_instruction_alignment.py --resume
+
+# Re-export after changing only reward thresholds (no generation):
+python scripts/build_instruction_alignment.py --export-only
+```
+
+Task-specific rewards use QA exact match/token F1, exact sentence count,
+required-keyword coverage, and continuation surface quality.  Candidates are
+split by source before export.  DPO uses the highest- versus lowest-reward
+distinct response when the reward gap is sufficient; RSFT includes only a
+highest-reward response that passes the task's hard constraint.  Both methods
+therefore use the same prompts, candidates, and reward definition.
+
+```bash
+python train/dpo.py --config configs/train_instruction_dpo.yaml
+python train/sft.py --config configs/train_instruction_rsft.yaml
+```
+
+Both policies initialize from `checkpoints/instruction_sft/sft.pt`; the legacy
+Base-initialized DPO/RSFT configs are retained only for historical comparison.
 
 ### Step 6: DPO (Direct Preference Optimization)
 
@@ -189,7 +250,25 @@ For detailed theory and formulas, see [docs/theory.md](docs/theory.md).
 pytest tests/ -v
 ```
 
-Tests cover: model shapes, causal masking, DPO loss, reward scoring, SFT labels, tokenizer.
+Tests cover: model shapes, causal masking, DPO loss, reward scoring, SFT labels,
+instruction-data constraints, and tokenizer behavior.
+
+## Comprehensive Evaluation
+
+Compare Base, SFT, DPO, and RSFT under one reproducible protocol:
+
+```bash
+python eval/comprehensive_eval.py \
+  --max-lm-batches 100 \
+  --seeds 42,123 \
+  --output results/comprehensive_eval
+```
+
+The evaluator reports held-out TinyStories NLL/perplexity, response-only SFT
+NLL, DPO preference accuracy and margin, fixed-seed generation metrics, and
+generation throughput. It saves JSON, CSV, Markdown, raw samples, and randomized
+A/B pairs for human or LLM-as-a-judge review. Losses from different objectives
+are kept separate because their numeric values are not directly comparable.
 
 ## References
 

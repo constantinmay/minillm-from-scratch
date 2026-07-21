@@ -1,0 +1,54 @@
+{
+  "candidate_prompts": 1000,
+  "candidate_stats": {
+    "continuation:hard_pass_prompts": 248,
+    "continuation:prompts": 250,
+    "keyword_story:hard_pass_prompts": 67,
+    "keyword_story:prompts": 250,
+    "question_answering:hard_pass_prompts": 224,
+    "question_answering:prompts": 250,
+    "sentence_count:hard_pass_prompts": 249,
+    "sentence_count:prompts": 250
+  },
+  "min_reward_gap": 0.1,
+  "dpo": {
+    "train": {
+      "total": 534,
+      "tasks": {
+        "sentence_count": 168,
+        "continuation": 138,
+        "question_answering": 36,
+        "keyword_story": 192
+      }
+    },
+    "valid": {
+      "total": 56,
+      "tasks": {
+        "keyword_story": 18,
+        "sentence_count": 18,
+        "continuation": 15,
+        "question_answering": 5
+      }
+    }
+  },
+  "rsft": {
+    "train": {
+      "total": 715,
+      "tasks": {
+        "sentence_count": 224,
+        "question_answering": 203,
+        "continuation": 223,
+        "keyword_story": 65
+      }
+    },
+    "valid": {
+      "total": 73,
+      "tasks": {
+        "continuation": 25,
+        "sentence_count": 25,
+        "question_answering": 21,
+        "keyword_story": 2
+      }
+    }
+  }
+}

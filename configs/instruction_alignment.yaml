@@ -1,0 +1,13 @@
+model_path: checkpoints/instruction_sft/sft.pt
+model_config: configs/model_config.yaml
+tokenizer_path: tokenizer/minillm_tokenizer.json
+source_path: data/instruction_sft/train.jsonl
+output_dir: data/instruction_alignment
+num_prompts: 1000
+valid_fraction: 0.1
+k: 8
+max_new_tokens: 80
+temperature: 0.8
+top_k: 40
+min_reward_gap: 0.1
+seed: 42

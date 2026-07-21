@@ -25,6 +25,7 @@ class SwiGLU(nn.Module):
         self.gate_proj = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
         self.up_proj = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
         self.down_proj = nn.Linear(config.intermediate_size, config.n_embd, bias=config.bias)
+        self.down_proj._is_residual = True
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

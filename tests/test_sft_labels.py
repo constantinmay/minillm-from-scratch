@@ -1,148 +1,85 @@
-"""Tests for SFT label masking: prompt tokens should have labels=-100."""
+"""Regression tests for causal next-token alignment in SFT data."""
 
-import sys
+import json
 import os
+import sys
+
+import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import pytest
-import torch
+from train.sft import SFTDataset, build_pretrain_targets, collate_sft
 
 
-# ---------------------------------------------------------------------------
-# Pure-function SFT template helper (duplicated for test isolation)
-# ---------------------------------------------------------------------------
+class FakeTokenizer:
+    def bos_id(self):
+        return 1
 
-SFT_PROMPT_TEMPLATE = "<|prompt|>"
-SFT_RESPONSE_TEMPLATE = "<|response|>"
-SFT_END_TEMPLATE = "<|end|>"
+    def eos_id(self):
+        return 2
+
+    def encode(self, text, add_special_tokens=False):
+        return [10 + ord(char) for char in text]
 
 
-def build_sft_input_and_labels(
-    prompt_text: str,
-    response_text: str,
-    encode_fn,
-    prompt_token_id: int = 0,
-    response_token_id: int = 1,
-    end_token_id: int = 2,
-):
-    """Build input_ids and labels for SFT training.
-
-    The full sequence is: [prompt_token] + prompt_ids + [response_token] +
-    response_ids + [end_token].
-
-    Labels: -100 for the prompt portion (including prompt special token),
-    real ids for the response portion.
-
-    Args:
-        prompt_text: Raw prompt string.
-        response_text: Raw response string.
-        encode_fn: Callable that encodes a string to list[int] of token ids.
-        prompt_token_id: ID for the prompt special token.
-        response_token_id: ID for the response special token.
-        end_token_id: ID for the end special token.
-
-    Returns:
-        (input_ids, labels) as 1-D lists of ints.
-    """
-    prompt_ids = encode_fn(prompt_text)
-    response_ids = encode_fn(response_text)
-
-    input_ids = (
-        [prompt_token_id]
-        + prompt_ids
-        + [response_token_id]
-        + response_ids
-        + [end_token_id]
+def make_dataset(tmp_path, prompt="Hi", response="World", max_length=64):
+    path = tmp_path / "sft.jsonl"
+    path.write_text(
+        json.dumps({"prompt": prompt, "response": response}) + "\n",
+        encoding="utf-8",
     )
-
-    # Prompt portion: from prompt_token through response_token (inclusive)
-    prompt_len = 1 + len(prompt_ids) + 1  # prompt_tok + prompt_ids + response_tok
-
-    labels = [-100] * prompt_len + response_ids + [end_token_id]
-
-    assert len(input_ids) == len(labels)
-    return input_ids, labels
+    return SFTDataset(str(path), FakeTokenizer(), max_length=max_length)
 
 
-# ---------------------------------------------------------------------------
-# Simple mock encode function for testing
-# ---------------------------------------------------------------------------
+def test_sft_uses_shifted_next_token_labels(tmp_path):
+    dataset = make_dataset(tmp_path)
+    input_ids, labels = dataset[0]
 
-def _mock_encode(text: str) -> list:
-    """Deterministic mock encoder: each char gets a unique id starting at 10."""
-    return [ord(c) % 100 + 10 for c in text]
+    tokenizer = FakeTokenizer()
+    prompt_ids = tokenizer.encode("Hi ", add_special_tokens=False)
+    response_ids = tokenizer.encode("World", add_special_tokens=False)
+    full_ids = [tokenizer.bos_id()] + prompt_ids + response_ids + [tokenizer.eos_id()]
+
+    assert input_ids.tolist() == full_ids[:-1]
+    assert labels[: len(prompt_ids)].tolist() == [-100] * len(prompt_ids)
+    assert labels[len(prompt_ids) :].tolist() == response_ids + [tokenizer.eos_id()]
+
+    # At the first trained position, the input is the final prompt token and
+    # the label is the first response token--never the same sequence position.
+    first_response_pos = len(prompt_ids)
+    assert input_ids[first_response_pos].item() == prompt_ids[-1]
+    assert labels[first_response_pos].item() == response_ids[0]
+    assert input_ids[first_response_pos].item() != labels[first_response_pos].item()
 
 
-class TestSFTLabelMasking:
+def test_auxiliary_pretrain_targets_restore_shifted_prompt_only(tmp_path):
+    short = make_dataset(tmp_path, prompt="A", response="BC")[0]
+    long_path = tmp_path / "second.jsonl"
+    long_path.write_text(
+        json.dumps({"prompt": "Long", "response": "Answer"}) + "\n",
+        encoding="utf-8",
+    )
+    long = SFTDataset(str(long_path), FakeTokenizer(), max_length=64)[0]
 
-    def test_sft_label_masking(self):
-        """Prompt tokens have labels=-100, response tokens have real labels."""
-        prompt = "Hello"
-        response = "World"
-        input_ids, labels = build_sft_input_and_labels(
-            prompt, response, _mock_encode
+    input_ids, labels = collate_sft([short, long])
+    targets = build_pretrain_targets(input_ids, labels)
+
+    for row in range(2):
+        trained = (labels[row] != -100).nonzero(as_tuple=False)
+        first_response_pos = int(trained[0].item())
+        assert torch.equal(
+            targets[row, :first_response_pos],
+            input_ids[row, 1 : first_response_pos + 1],
         )
 
-        # Sanity: lengths match
-        assert len(input_ids) == len(labels)
+        last_trained = int(trained[-1].item())
+        assert (targets[row, last_trained + 1 :] == -100).all()
 
-        # The prompt portion includes: [prompt_tok] + prompt_ids + [response_tok]
-        # = 1 + 5 + 1 = 7 tokens with labels=-100
-        prompt_len = 1 + len(_mock_encode(prompt)) + 1
-        for i in range(prompt_len):
-            assert labels[i] == -100, (
-                f"Position {i} is in the prompt portion but has label {labels[i]} instead of -100"
-            )
 
-        # The response portion should have real token IDs
-        for i in range(prompt_len, len(labels)):
-            assert labels[i] != -100, (
-                f"Position {i} is in the response portion but has label -100"
-            )
+def test_long_prompt_still_leaves_a_response_target(tmp_path):
+    dataset = make_dataset(tmp_path, prompt="P" * 100, response="R", max_length=8)
+    input_ids, labels = dataset[0]
 
-    def test_sft_response_labels_match_input(self):
-        """Response labels should match the corresponding response token IDs."""
-        prompt = "What is 2+2?"
-        response = "The answer is 4."
-        input_ids, labels = build_sft_input_and_labels(
-            prompt, response, _mock_encode
-        )
-
-        response_ids = _mock_encode(response)
-        # Response labels = response_ids + [end_token_id]
-        expected_response_labels = response_ids + [2]
-
-        prompt_len = 1 + len(_mock_encode(prompt)) + 1
-        actual_response_labels = labels[prompt_len:]
-
-        assert actual_response_labels == expected_response_labels
-
-    def test_sft_empty_prompt(self):
-        """Empty prompt still masks the special tokens."""
-        prompt = ""
-        response = "Hi"
-        input_ids, labels = build_sft_input_and_labels(
-            prompt, response, _mock_encode
-        )
-
-        # Prompt portion: [prompt_tok] + [] + [response_tok] = 2 tokens
-        assert labels[0] == -100
-        assert labels[1] == -100
-        # Remaining labels are real
-        for i in range(2, len(labels)):
-            assert labels[i] != -100
-
-    def test_sft_total_length(self):
-        """Total length should be prompt_special + prompt + response_special + response + end_special."""
-        prompt = "A"
-        response = "B C"
-        input_ids, labels = build_sft_input_and_labels(
-            prompt, response, _mock_encode
-        )
-
-        p_len = len(_mock_encode(prompt))
-        r_len = len(_mock_encode(response))
-        expected_total = 1 + p_len + 1 + r_len + 1
-        assert len(input_ids) == expected_total
-        assert len(labels) == expected_total
+    assert len(input_ids) == 8
+    assert len(labels) == 8
+    assert labels[-1].item() != -100
