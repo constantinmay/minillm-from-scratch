@@ -35,11 +35,26 @@ $$EM=\frac1N\sum_i\mathbf1[\hat y_i=y_i].$$
 
 它严格、可解释，但同义答案可能被误判。因此大任务通常同时报告 token F1；本项目窄 QA 答案适合 EM。
 
+```python
+import re
+
+def normalize_answer(text):
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+exact_match = float(normalize_answer(prediction) == normalize_answer(reference))
+```
+
 ### 关键词约束
 
 $$Coverage_i=\frac{|K_i\cap tokens(\hat y_i)|}{|K_i|},$$
 
 $$AllKeyword=\frac1N\sum_i\mathbf1[Coverage_i=1].$$
+
+```python
+present = [keyword.lower() in prediction.lower() for keyword in required]
+coverage = sum(present) / len(present)
+all_keywords = float(all(present))
+```
 
 ### 句数控制
 

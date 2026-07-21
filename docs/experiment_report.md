@@ -52,7 +52,7 @@ DPO-v2 checkpoint 选择在独立 200-prompt sweep 上完成。100/200/300/400 m
 - 生成 seed：42、123，共 2,000 次/模型；相同 prompt 和 seed 对所有模型复用。
 - 解码：`temperature=0.01`、`top_k=1`、`max_new_tokens=80`，实际等价于确定性 top-1 选择。
 - LM 评测：TinyStories validation 上 100 batches。
-- 偏好评测：DPO-v2 的 12 对严格 valid pairs。表中 accuracy 与 margin 是模型自身的 chosen/rejected 排序，不依赖 reference；本次原始 JSON 的附加 DPO-loss 诊断使用 Base，后续评测器已改为显式指定 InstructionSFT reference。
+- 偏好评测：DPO-v2 的 12 对严格 valid pairs。表中 accuracy 与 margin 是模型自身的 chosen/rejected 排序，不依赖 reference；原始 JSON 的附加 `dpo_loss_vs_reference` 诊断固定使用 InstructionSFT reference。
 - 原始产物：`results/final_evaluation/evaluation_results.json`、CSV、逐模型样例和盲评对。
 
 由于贪心解码对 seed 不敏感，两个 seed 不应被误解为两次独立训练。它们保持了评测接口与采样实验的一致性，但不能用于估计训练方差。

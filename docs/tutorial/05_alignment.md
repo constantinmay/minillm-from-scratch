@@ -35,6 +35,29 @@ $$
 
 项目使用 response token 的平均 log-prob，减少长度差对分数的直接影响。它是工程选择，复现实验时必须保持一致。
 
+最小实现直接对应上式：
+
+```python
+import torch.nn.functional as F
+
+policy_ratio = policy_chosen_logps - policy_rejected_logps
+reference_ratio = ref_chosen_logps - ref_rejected_logps
+relative_margin = beta * (policy_ratio - reference_ratio)
+loss = -F.logsigmoid(relative_margin).mean()
+```
+
+reference 模型必须冻结；只有 policy 参与反向传播：
+
+```python
+policy_chosen = compute_logprobs(policy, chosen_ids, chosen_labels)
+policy_rejected = compute_logprobs(policy, rejected_ids, rejected_labels)
+with torch.no_grad():
+    ref_chosen = compute_logprobs(reference, chosen_ids, chosen_labels)
+    ref_rejected = compute_logprobs(reference, rejected_ids, rejected_labels)
+loss = dpo_loss(policy_chosen, policy_rejected, ref_chosen, ref_rejected, beta=0.1)
+loss.backward()
+```
+
 ## 2. 偏好数据比 loss 更重要
 
 若 chosen/rejected 只在长度或格式上不同，DPO 会优化捷径，而不是语义质量。本项目 DPO-v2 采用可审计的严格配对：
@@ -61,6 +84,20 @@ y^*=\arg\max_{y\in\{y_1,\dots,y_K\}}R(x,y).
 $$
 
 它计算成本较低，但会继承候选分布和奖励函数的偏差。规则无法判断语义时，RSFT 也不能凭空获得可靠监督。
+
+教学版筛选逻辑是：
+
+```python
+selected = []
+for prompt, candidates in candidate_pool:
+    scored = [(reward(prompt, text), text) for text in candidates]
+    score, best = max(scored, key=lambda pair: pair[0])
+    if hard_constraint_passes(prompt, best):
+        selected.append({"prompt": prompt, "response": best, "reward": score})
+# 然后把 selected 交给与 SFT 相同的 response-only 训练循环
+```
+
+必须在筛选前固定规则、记录所有候选和分数，并保留未参与筛选的测试集，否则容易产生只对奖励函数好看的结果。
 
 ```bash
 python train/sft.py --config configs/train_instruction_rsft.yaml

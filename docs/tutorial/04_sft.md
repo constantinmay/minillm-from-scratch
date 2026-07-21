@@ -42,6 +42,20 @@ labels[:len(prompt_ids)] = [-100] * len(prompt_ids)
 
 这里容易出现 off-by-one：模型在 input 位置 $t$ 预测 `full_ids[t+1]`，所以 mask 的对象必须是移位后的 labels。
 
+一个最小 SFT 更新与预训练几乎相同，区别就在 labels：
+
+```python
+model.train()
+optimizer.zero_grad(set_to_none=True)
+result = model(input_ids, targets=labels)  # labels 的 prompt 区域为 -100
+sft_loss = result["loss"]
+sft_loss.backward()
+torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+optimizer.step()
+```
+
+正式实现还加入 FP16、梯度累积、scheduler、验证集和 checkpoint，见 `train/sft.py`；不要在每个 micro-step 都调用 `optimizer.step()`。
+
 ## 4. 保留预训练能力
 
 项目可加入小权重的全 token LM loss：
@@ -50,6 +64,13 @@ $$
 \mathcal L=\mathcal L_{SFT}+\alpha\mathcal L_{LM},
 \qquad \alpha=0.05.
 $$
+
+```python
+sft_loss = model(input_ids, targets=masked_labels)["loss"]
+lm_labels = build_pretrain_targets(input_ids, masked_labels)
+lm_loss = model(input_ids, targets=lm_labels)["loss"]
+loss = sft_loss + 0.05 * lm_loss
+```
 
 这只能缓解遗忘，不保证消除遗忘，所以仍需比较 TinyStories PPL 和开放续写指标。
 

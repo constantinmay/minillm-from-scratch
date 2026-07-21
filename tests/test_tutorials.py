@@ -2,6 +2,7 @@
 
 import ast
 import json
+import re
 from pathlib import Path
 
 
@@ -42,3 +43,13 @@ def test_tutorial_notebooks_are_valid_json_and_code_compiles():
         for cell in notebook["cells"]:
             if cell["cell_type"] == "code":
                 ast.parse("".join(cell["source"]), filename=str(path))
+
+
+def test_documentation_index_links_resolve_locally():
+    for index in (ROOT / "docs" / "README.md", TUTORIAL / "README.md"):
+        text = index.read_text(encoding="utf-8")
+        for target in re.findall(r"\[[^]]+\]\(([^)]+)\)", text):
+            if target.startswith(("http://", "https://", "#")):
+                continue
+            path = (index.parent / target.split("#", 1)[0]).resolve()
+            assert path.exists(), f"broken link in {index}: {target}"

@@ -89,7 +89,7 @@ $$\nabla_\theta J(\theta) = \mathbb{E}[\nabla_\theta \log \pi_\theta(a|s) \cdot 
 
 ### 背景
 
-PPO 是 OpenAI 在 2017 年提出的强化学习算法，是 RLHF 的标准训练方法（ChatGPT 用的就是 PPO）。
+PPO 是 OpenAI 在 2017 年提出的强化学习算法，也是早期 RLHF 系统常用的方法之一。公开资料不足以据此断言某个当前闭源产品的完整训练方案。
 
 ### 核心思想
 
@@ -270,7 +270,7 @@ $$\text{SwiGLU}(x) = (W_{down})^T \left( \text{silu}(x W_{gate}) \odot (x W_{up}
 ### 对比 ReLU
 
 - ReLU：$\max(0, x)$，简单但信息损失大
-- SwiGLU：带门控机制，信息流更丰富，LLaMA/GPT-4 都用它
+- SwiGLU：带门控机制，已被 LLaMA 等公开架构采用；GPT-4 的完整结构并未公开
 
 ### 为什么需要 3 个线性层
 
