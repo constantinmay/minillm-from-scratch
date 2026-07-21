@@ -38,6 +38,7 @@ htmlcov/
 # Results & outputs
 results/
 report/
+logs/
 
 # Papers (separate)
 papers/
