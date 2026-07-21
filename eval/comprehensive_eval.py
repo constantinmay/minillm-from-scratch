@@ -44,9 +44,9 @@ from train.sft import SFTDataset, collate_sft
 DEFAULT_MODELS = OrderedDict(
     [
         ("Base", "checkpoints/base.pt"),
-        ("SFT", "checkpoints/sft.pt"),
-        ("DPO", "checkpoints/dpo.pt"),
-        ("RSFT", "checkpoints/rsft.pt"),
+        ("InstructionSFT", "checkpoints/instruction_sft/sft.pt"),
+        ("InstructionDPOv2", "checkpoints/instruction_dpo_v2/dpo_step_200.pt"),
+        ("InstructionRSFT", "checkpoints/instruction_rsft/rsft.pt"),
     ]
 )
 
@@ -210,7 +210,7 @@ def evaluate_preferences(
         "accuracy": correct / total if total else 0.0,
         "mean_logprob_margin": all_margins.mean().item() if total else 0.0,
         "median_logprob_margin": all_margins.median().item() if total else 0.0,
-        "dpo_loss_vs_base": (
+        "dpo_loss_vs_reference": (
             sum(loss * count for loss, count in losses) / total if total else float("inf")
         ),
         "pairs": total,
@@ -425,9 +425,10 @@ def fmt(value, digits=4):
     return f"{value:.{digits}f}" if isinstance(value, float) else str(value)
 
 
-def write_markdown_report(results: Mapping[str, dict], metadata: dict, path: Path) -> None:
+def write_instruction_report(results: Mapping[str, dict], metadata: dict, path: Path) -> None:
+    """Write the final instruction-focused report with auditable task metrics."""
     lines = [
-        "# MiniLLM Comprehensive Evaluation",
+        "# MiniLLM Instruction Evaluation",
         "",
         "## Protocol",
         "",
@@ -436,13 +437,14 @@ def write_markdown_report(results: Mapping[str, dict], metadata: dict, path: Pat
         f"- Prompts: `{metadata['prompt_count']}`",
         f"- Generation: temperature={metadata['temperature']}, top_k={metadata['top_k']}, max_new_tokens={metadata['max_new_tokens']}",
         f"- TinyStories LM evaluation batches: `{metadata['max_lm_batches']}`",
+        f"- Preference-loss reference: `{metadata['preference_reference']}`",
         "",
-        "Metrics from different sections have different meanings and must not be compared as one loss.",
+        "Metrics from different sections have different meanings and are not combined into one score.",
         "",
         "## Comparable Results",
         "",
-        "| Model | TinyStories NLL ↓ | TinyStories PPL ↓ | SFT response NLL ↓ | DPO pref. acc. ↑ | DPO margin ↑ | Distinct-2 ↑ | Repeat-3 ↓ | Empty ↓ | End rate ↑ | Keyword cov. ↑ | 3-sentence ↑ | tok/s ↑ |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Model | LM PPL (down) | Response NLL (down) | Pref. acc. (up) | Pref. margin (up) | Sentence exact (up) | QA EM (up) | Keyword cov. (up) | Keyword all (up) | Repeat-3 (down) | End rate (up) | tok/s (up) |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for name, result in results.items():
         lm = result["language_modeling"]
@@ -450,12 +452,12 @@ def write_markdown_report(results: Mapping[str, dict], metadata: dict, path: Pat
         pref = result["preference"]
         gen = result["generation"]
         lines.append(
-            f"| {name} | {fmt(lm['nll'])} | {fmt(lm['perplexity'], 2)} | "
-            f"{fmt(sft['nll'])} | {fmt(pref['accuracy'])} | "
-            f"{fmt(pref['mean_logprob_margin'])} | {fmt(gen['distinct_2'])} | "
-            f"{fmt(gen['repetition_3'])} | {fmt(gen['empty_rate'])} | "
-            f"{fmt(gen['sentence_end_rate'])} | {fmt(gen['keyword_coverage'])} | "
-            f"{fmt(gen['exact_three_sentence_rate'])} | {fmt(gen['tokens_per_second'], 1)} |"
+            f"| {name} | {fmt(lm['perplexity'], 2)} | {fmt(sft['nll'])} | "
+            f"{fmt(pref['accuracy'])} | {fmt(pref['mean_logprob_margin'])} | "
+            f"{fmt(gen['exact_sentence_count_rate'])} | {fmt(gen['qa_exact_match'])} | "
+            f"{fmt(gen['keyword_coverage'])} | {fmt(gen['keyword_all_success_rate'])} | "
+            f"{fmt(gen['repetition_3'])} | {fmt(gen['sentence_end_rate'])} | "
+            f"{fmt(gen['tokens_per_second'], 1)} |"
         )
 
     lines.extend(
@@ -464,16 +466,15 @@ def write_markdown_report(results: Mapping[str, dict], metadata: dict, path: Pat
             "## Interpretation Notes",
             "",
             "- TinyStories PPL measures retained in-domain language modeling ability.",
-            "- SFT response NLL measures likelihood of held-out target continuations.",
-            "- Preference accuracy measures whether chosen continuations receive higher average log-probability than rejected continuations.",
-            "- Distinct-n alone is not quality: random text can be diverse. Read it together with repetition, ending, keyword coverage, and blind judgments.",
-            "- Keyword coverage is averaged only over prompts with explicit required words; unconstrained prompts are excluded.",
-            "- Empty rate is crucial here because the training data uses raw story continuation rather than an instruction template.",
-            "- `blind_judge_pairs.jsonl` is randomized; evaluators must not read `blind_judge_key.json` before scoring.",
+            "- Response NLL measures likelihood of held-out instruction responses.",
+            "- Preference accuracy measures chosen-versus-rejected response ranking.",
+            "- Sentence exact, QA exact match, and all-keyword success are the primary auditable instruction metrics.",
+            "- Distinct-n alone is not quality; read it with repetition, constraint success, and blind judgments.",
+            "- `blind_judge_pairs.jsonl` is randomized; do not read its answer key before scoring.",
             "",
             "## Generation Breakdown by Prompt Type",
             "",
-            "| Model | Type | Samples | Avg words | Empty ↓ | End rate ↑ | Distinct-2 ↑ | Keyword cov. ↑ |",
+            "| Model | Type | Samples | Avg words | Empty (down) | End rate (up) | Distinct-2 (up) | Keyword cov. (up) |",
             "|---|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -530,8 +531,13 @@ def main() -> None:
     parser.add_argument("--tokenizer", default="tokenizer/minillm_tokenizer.json")
     parser.add_argument("--lm-valid", default="data/processed/valid.bin")
     parser.add_argument("--sft-valid", default="data/instruction_sft/valid.jsonl")
-    parser.add_argument("--dpo-valid", default="data/dpo_v2/valid.jsonl")
-    parser.add_argument("--prompts", default="data/prompts/eval_prompts.jsonl")
+    parser.add_argument("--dpo-valid", default="data/instruction_dpo_v2/valid.jsonl")
+    parser.add_argument(
+        "--preference-reference",
+        default="checkpoints/instruction_sft/sft.pt",
+        help="Frozen reference checkpoint used only for the diagnostic DPO loss.",
+    )
+    parser.add_argument("--prompts", default="data/instruction_sft/test.jsonl")
     parser.add_argument("--output", default="results/comprehensive_eval")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--batch-size", type=int, default=16)
@@ -544,15 +550,19 @@ def main() -> None:
         default=0,
         help="Evaluate at most N prompts per type; 0 uses all prompts.",
     )
-    parser.add_argument("--temperature", type=float, default=0.8)
-    parser.add_argument("--top-k", type=int, default=40)
-    parser.add_argument("--beta", type=float, default=0.05)
+    parser.add_argument("--temperature", type=float, default=0.01)
+    parser.add_argument("--top-k", type=int, default=1)
+    parser.add_argument("--beta", type=float, default=0.1)
     args = parser.parse_args()
 
     models = parse_models(args.model)
     for name, path in models.items():
         if not os.path.exists(path):
             raise FileNotFoundError(f"{name} checkpoint not found: {path}")
+    if not os.path.exists(args.preference_reference):
+        raise FileNotFoundError(
+            f"Preference reference checkpoint not found: {args.preference_reference}"
+        )
     seeds = [int(value.strip()) for value in args.seeds.split(",") if value.strip()]
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -576,13 +586,19 @@ def main() -> None:
     print(f"Models: {', '.join(models)}")
     print(f"Prompts: {len(prompt_records)} x {len(seeds)} seeds")
 
-    reference_model = load_model(models["Base"], config, args.device)
+    base_model = load_model(models["Base"], config, args.device)
+    if os.path.normpath(args.preference_reference) == os.path.normpath(models["Base"]):
+        preference_reference_model = base_model
+    else:
+        preference_reference_model = load_model(
+            args.preference_reference, config, args.device
+        )
     results: OrderedDict[str, dict] = OrderedDict()
     samples_by_model: OrderedDict[str, List[dict]] = OrderedDict()
 
     for name, checkpoint_path in models.items():
         print(f"\n{'=' * 64}\nEvaluating {name}: {checkpoint_path}\n{'=' * 64}")
-        model = reference_model if name == "Base" else load_model(
+        model = base_model if name == "Base" else load_model(
             checkpoint_path, config, args.device
         )
         lm_metrics = evaluate_lm_nll(
@@ -600,7 +616,7 @@ def main() -> None:
         print(f"SFT response NLL={sft_metrics['nll']:.4f}")
         preference_metrics = evaluate_preferences(
             model,
-            reference_model,
+            preference_reference_model,
             dpo_dataset,
             max(1, args.batch_size // 2),
             args.device,
@@ -656,13 +672,14 @@ def main() -> None:
         "lm_valid": args.lm_valid,
         "sft_valid": args.sft_valid,
         "dpo_valid": args.dpo_valid,
+        "preference_reference": args.preference_reference,
     }
     payload = {"metadata": metadata, "results": results}
     (output_dir / "evaluation_results.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     write_csv_summary(results, output_dir / "evaluation_summary.csv")
-    write_markdown_report(results, metadata, output_dir / "evaluation_report.md")
+    write_instruction_report(results, metadata, output_dir / "evaluation_report.md")
     export_blind_pairs(samples_by_model, output_dir)
     print(f"\nEvaluation artifacts saved to {output_dir}")
 

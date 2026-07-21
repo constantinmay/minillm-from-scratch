@@ -25,17 +25,6 @@
 
 ## 1. 模型架构基础
 
-### 1.0 Gated Attention：门控注意力输出
-
-- **论文**：Qiu, Z., Wang, Z., Zheng, B., et al. (2025). *Gated Attention for Large Language Models: Non-linearity, Sparsity, and Attention-Sink-Free*.
-- **本地文件**：`10615_Gated_Attention_for_Larg.pdf`
-- **文本提取版**：`Gated_Attention_for_Large_Language_Models.md`
-
-**对本项目的意义：**
-- 项目的注意力层支持在 SDPA 输出后施加 sigmoid gate，该设计直接来自此论文。
-- 论文报告门控可以缓解 attention sink、提高训练稳定性；本项目只把它作为小模型架构实验，不能直接外推论文中十亿参数规模的收益。
-- PDF 用于正式引用；Markdown 是全文检索辅助版本，两者用途不同，因此均保留。
-
 ### 1.1 Attention Is All You Need（Transformer 原始论文）
 
 - **论文**：Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, L., & Polosukhin, I. (2017). *Attention Is All You Need*.
@@ -50,10 +39,10 @@
 - 残差连接 + LayerNorm 包裹每个子层（原始为 Post-LN；现代实践更偏好 Pre-LN）
 
 **对本项目的意义：**
-- 我们的模型严格遵循 LLaMA 系 decoder-only 架构（Transformer decoder 的现代化版本）
+- 我们的模型是 LLaMA 风格的 decoder-only Transformer，但不是逐项复刻
 - 实现内容：多头因果自注意力 + RoPE、RMSNorm、SwiGLU MLP、带残差连接
 - 关键现代化改进：Pre-RMSNorm（替代 Post-LN）、SwiGLU（替代 ReLU/GELU）、RoPE（替代正弦/可学习位置编码）
-- 我们的模型配置：6 层、6 头、384 维，按 LLaMA 架构等比缩小
+- 我们的模型配置为 6 层、6 头、384 维，共 17,232,768 参数
 
 ### 1.2 GPT-1：通过生成式预训练提升语言理解能力
 
@@ -128,7 +117,7 @@
 - 引入了基于 GPT-4 的评估框架，评估语法、创造性和一致性
 
 **对本项目的意义——这是我们的核心数据论文：**
-- 直接支撑了我们的模型规模选择：20-30M 参数处于 TinyStories 论文验证的能力范围之内
+- 直接支撑了我们的模型规模选择：实际 17.23M 参数处于 TinyStories 论文验证的小模型能力范围内
 - TinyStories 数据集是我们的预训练语料（我们同时从中派生 SFT/DPO 数据）
 - 证实了降低数据复杂度（简单词汇、短故事、限定主题）能让微型模型达到惊人的效果
 - 我们的评估指标（语法、连贯性、关键词覆盖率）与其评估框架一致
@@ -136,7 +125,7 @@
 **核心洞见：**
 > "降低数据复杂度（简单词汇、短故事、限定主题）能让微型模型达到惊人的能力水平。"
 
-这验证了我们项目的核心前提：在 TinyStories 上训练的 20-30M 模型**应当能够**生成连贯的英文文本。
+这验证了我们的核心前提：在 TinyStories 上训练的 17.23M 模型具备学习连贯英文故事的合理容量。
 
 ---
 
@@ -161,7 +150,7 @@
 - 关键经验：即使是小规模的 SFT 数据集，也能显著改变模型行为使其趋向指令跟随
 
 **影响我们设计决策的要点：**
-- SFT prompt 模板：`### Instruction:\n{prompt}\n### Response:\n{response}`——指令和回复之间有清晰分隔符
+- SFT 使用 tokenizer 已知的纯文本字段：`Instruction: ...\nInput: ...\nResponse:`，避免新增特殊模板 token
 - 只在 response token 上计算损失，防止模型记忆 prompt 模式
 - 使用更低的学习率（1e-4 vs 预训练的 3e-4），保留预训练知识同时适配行为
 
@@ -359,12 +348,12 @@
 - 给定计算预算下的近最优模型规模遵循可预测的曲线
 
 **对本项目的意义：**
-- 指导我们对 20-30M 模型能实现什么效果建立合理预期
+- 指导我们对 17.23M 模型能实现什么效果建立合理预期
 - 解释了为什么后训练技术（SFT、DPO、RSFT）对小模型特别有价值：它们从有限的参数量中提取更多能力
-- 我们的训练预算（30k 步 × 128 批次 × 256 token ≈ 10 亿 token）与模型规模成比例
+- 默认预算约为 `30k × 16 × 256 ≈ 1.23 亿` token 位置；梯度累积只改变优化器更新频率
 
 **对项目的实际指导：**
-- 20-30M 参数在约 10 亿 token 上训练，接近 Chinchilla 最优比例（约 20 倍 token/参数）
+- 当前默认配置约处理 1.23 亿 token 位置，约为每参数 7.1 个 token，不能声称达到 Chinchilla 最优
 - 除了原始规模之外，对齐技术（SFT/DPO/RSFT）对能力有乘数效应
 - 我们的 4 阶段对比（Base -> SFT -> DPO -> RSFT）将展示每个阶段如何从相同模型容量中提取更多性能
 
@@ -378,15 +367,15 @@
 - **arXiv**：https://arxiv.org/abs/2302.13971
 - **本地文件**：`2302.13971_LLaMA.pdf`
 
-**我们严格采纳的架构设计（与 LLaMA 一致）：**
+**本项目采用的 LLaMA 风格组件：**
 - **Pre-RMSNorm**：在 attention/MLP 之前使用 RMSNorm（非 LayerNorm），计算更高效，去掉均值中心化步骤
 - **SwiGLU 激活函数**：`SwiGLU(x) = (xW1 · sigmoid(xW1)) ⊙ (xW2)`，比标准 GELU 效果更好，MLP 中使用 3 个线性层（gate/up/down）
 - **旋转位置编码 RoPE**：在注意力计算中将位置信息融入 Q/K，支持相对位置推理，不使用可学习位置编码
 - **无偏置**：所有线性层（Q/K/V/O 投影、MLP、lm_head）均不使用 bias（`bias: false`）
-- **权重共享**：token embedding 权重与 lm_head 权重共享（`tie_weights: true`）
+- **权重共享**：token embedding 与 lm_head 共享是本项目为小模型节省参数的选择，并非 LLaMA 的逐项复刻
 
 **对本项目的意义：**
-- 严格复现 LLaMA 架构，确保学到的知识直接可迁移到前沿大模型
+- 通过实现相同的核心组件理解现代 decoder-only 架构，但不声称能力或权重可以直接迁移到前沿大模型
 - SwiGLU、RoPE、RMSNorm 是 LLaMA/Mistral/Qwen 等主流模型的标配
 - 证明了在更多数据上训练的更小模型可以匹敌更大的模型
 
@@ -402,7 +391,7 @@
 **对本项目的意义：**
 - 支撑了我们对 TinyStories（高质量、简单、一致的数据）的选择，而非多样但嘈杂的网络文本
 - "教科书质量"原则同样适用：TinyStories 相当于基础英文生成的"教科书"
-- 1.3B 模型在 70 亿 token 上训练就匹敌了更大的模型——我们的 20-30M 模型在约 10 亿 token 上遵循类似比例
+- Phi-1 说明高质量数据能够提高训练效率，但其规模和代码数据与本项目不同，不能直接按比例外推
 
 ### 9.3 TinyLlama：开源小型语言模型
 
@@ -413,7 +402,7 @@
 **对本项目的意义：**
 - 展示了在有限硬件上用社区工具训练 1.1B 模型（1 万亿 token）的方法
 - 表明 FlashAttention 和训练优化可以高效地训练小型模型
-- 我们的项目是这种方法的缩小版（20-30M 参数，10 亿 token）
+- 本项目借鉴小模型和高质量数据的思想，实际规模为 17.23M 参数
 
 ### 9.4 MiniCPM：揭示小型语言模型的潜力
 
@@ -496,9 +485,9 @@ L_DPO = -E[log sigmoid(beta * (log(pi_w/pi_ref_w) - log(pi_l/pi_ref_l)))]
 
 **第一层：硬约束（不满足直接淘汰）**
 ```
-hard_pass = (word_count >= 10)
-         and (repeat_3gram_ratio < 0.30)
-         and (num_required_words_present >= 1)
+hard_pass = task_specific_constraint(response)
+# QA: exact answer; sentence task: exact count; keyword task: all words present
+# continuation: length/ending/repetition surface checks（仅用于 RSFT，不用于 DPO-v2）
 ```
 
 **第二层：知识引导的质量奖励（"监督学习的影子"）**
@@ -680,17 +669,17 @@ L = CrossEntropyLoss(logits.view(-1, V), targets.view(-1))
 
 | 关切点 | 参考论文 | 结论 |
 |---|---|---|
-| 20-30M 模型能否生成连贯文本？ | TinyStories | 可以，10M+ 在简单数据上已足够 |
+| 17.23M 模型能否生成连贯文本？ | TinyStories | 可以，10M+ 在简单数据上已有实验证据 |
 | BPE 是否适合小词汇量英文？ | BPE 论文 | 适合，能很好地处理 OOV 问题 |
 | SFT 对微型模型是否有效？ | InstructGPT | 有效，SFT 在 1.3B 规模即可显著改变行为 |
 | DPO 是否能在 RTX 4060 上运行？ | DPO 论文 | 可以，只需 2 个模型（非 PPO 的 4 个） |
 | RSFT 是否是 PPO 的有效替代？ | Constitutional AI | 是，拒绝采样是成熟的实践方法 |
 | 规则奖励是否安全可靠？ | Ng et al. 1999 | 是，势函数塑形不改变最优策略，只加速学习 |
 | 奖励函数会被模型钻空子吗？ | Constrained RLHF 2024 | 有风险，需多维度奖励 + 渐进式惩罚缓解 |
-| 我们需要多少训练数据？ | 缩放定律、Phi-1 | 20-30M 参数配约 10 亿 token 接近最优 |
+| 当前训练量是否达到缩放最优？ | 缩放定律、Phi-1 | 未达到；本项目优先研究消费级算力下的完整训练链路 |
 | 架构设计是否需要担心？ | LLaMA | RoPE + SwiGLU + RMSNorm + 无偏置在前沿模型上已验证 |
 
-**总体评估**：文献强力支撑本项目的可行性。每一个设计决策都有已发表论文的先例支撑，模型规模（20-30M 在 TinyStories 上）处于同类已验证系统的能力范围之内。奖励塑形理论（Ng 1999）为我们"知识引导的规则奖励"提供了严格的理论保证：好的奖励塑形不改变最优策略，但能大幅加速学习。
+**总体评估**：文献支持在 TinyStories 上训练 17.23M 模型的可行性，但不保证后训练必然带来收益。本项目的规则奖励并非严格的势函数奖励塑形，不能直接套用 Ng et al. (1999) 的策略不变性结论；DPO-v1 的奖励过优化结果也说明必须用外部任务指标验证奖励设计。
 
 ---
 

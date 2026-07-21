@@ -1,9 +1,0 @@
-model_path: checkpoints/base.pt
-model_config: configs/model_config.yaml
-tokenizer_path: tokenizer/minillm_tokenizer.json
-prompts_path: data/prompts/rsft_prompts.jsonl
-output_path: data/rsft/rsft_train.jsonl
-k: 8
-max_new_tokens: 80
-temperature: 0.9
-top_k: 50

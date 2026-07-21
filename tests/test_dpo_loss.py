@@ -12,54 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-# ---------------------------------------------------------------------------
-# DPO loss pure functions (duplicated for test isolation)
-# ---------------------------------------------------------------------------
-
-def compute_logprobs(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    """Compute mean log-probability of target tokens given logits.
-
-    Args:
-        logits: (B, T, V) raw logits from the model.
-        targets: (B, T) target token IDs.
-
-    Returns:
-        (B,) tensor of mean log-probabilities per sequence.
-    """
-    log_probs = F.log_softmax(logits, dim=-1)
-    # Gather log-probs for the target tokens
-    target_log_probs = log_probs.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
-    # Average over sequence length
-    return target_log_probs.mean(dim=-1)
-
-
-def dpo_loss(
-    policy_chosen_logprobs: torch.Tensor,
-    policy_rejected_logprobs: torch.Tensor,
-    ref_chosen_logprobs: torch.Tensor,
-    ref_rejected_logprobs: torch.Tensor,
-    beta: float = 0.1,
-) -> torch.Tensor:
-    """Compute DPO loss.
-
-    Loss = -mean(log(sigmoid(beta * (log_pi_chosen - log_ref_chosen
-                                     - log_pi_rejected + log_ref_rejected))))
-
-    Args:
-        policy_chosen_logprobs: (B,) mean log-probs of chosen under policy.
-        policy_rejected_logprobs: (B,) mean log-probs of rejected under policy.
-        ref_chosen_logprobs: (B,) mean log-probs of chosen under reference.
-        ref_rejected_logprobs: (B,) mean log-probs of rejected under reference.
-        beta: DPO temperature parameter.
-
-    Returns:
-        Scalar loss tensor.
-    """
-    chosen_rewards = beta * (policy_chosen_logprobs - ref_chosen_logprobs)
-    rejected_rewards = beta * (policy_rejected_logprobs - ref_rejected_logprobs)
-    loss = -F.logsigmoid(chosen_rewards - rejected_rewards).mean()
-    return loss
+from train.dpo import compute_logprobs, dpo_loss
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +30,7 @@ class TinyModel(nn.Module):
     def forward(self, input_ids):
         x = self.embedding(input_ids)
         logits = self.head(x)
-        return logits
+        return {"logits": logits}
 
 
 # ---------------------------------------------------------------------------
@@ -151,14 +104,14 @@ class TestDPOLoss:
         model = TinyModel(vocab_size=vocab_size, embed_dim=16)
 
         input_ids = torch.randint(0, vocab_size, (2, 8))
-        logits = model(input_ids)
+        logits = model(input_ids)["logits"]
 
         # Compute logprobs manually
         log_probs = F.log_softmax(logits, dim=-1)
         target_log_probs = log_probs.gather(dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
         expected = target_log_probs.mean(dim=-1)
 
-        result = compute_logprobs(logits, input_ids)
+        result = compute_logprobs(model, input_ids, input_ids)
 
         assert torch.allclose(result, expected, atol=1e-6), (
             f"compute_logprobs result {result} does not match expected {expected}"

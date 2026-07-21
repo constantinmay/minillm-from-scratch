@@ -1,6 +1,4 @@
 # Checkpoints (too large for GitHub)
-checkpoints_v2/
-checkpoints_v3/
 data/checkpoints/
 *.pt
 *.pth
@@ -10,11 +8,6 @@ data/checkpoints/
 data/raw/TinyStories-*.txt
 data/processed/train.bin
 data/processed/valid.bin
-
-# Old/replaced data
-data/sft/
-data/dpo/
-data/raw/toy_*.txt
 
 # Python cache
 __pycache__/
@@ -26,6 +19,7 @@ __pycache__/
 # Testing
 .pytest_cache/
 test-temp-*/
+tmp_pytest*/
 .coverage
 htmlcov/
 

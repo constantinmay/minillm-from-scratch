@@ -1,282 +1,201 @@
-# Training LLM from Scratch
+# MiniLLM from Scratch
 
-A complete LLM training pipeline implemented from scratch on a consumer-grade laptop (RTX 4060 8GB). No HuggingFace Transformers — every component is hand-written.
+A reproducible 17.23M-parameter language-model project for studying instruction
+following and preference alignment on one RTX 4060 Laptop GPU. The Transformer,
+training losses, data builders, generation, and evaluation are implemented in
+PyTorch without Hugging Face Transformers.
 
-## What You'll Get
+## Research question
 
-- **Understand how LLMs actually work** by building every layer yourself: RoPE, SwiGLU, RMSNorm, attention, generation
-- **Experience the full training pipeline**: BPE Tokenizer → Pretraining → SFT → DPO → RSFT
-- **Run on consumer hardware**: 17M parameters, 8GB GPU, complete training in hours
-- **Learn from real experiments**: what works, what breaks, and why — with data to prove it
+Can a very small TinyStories base model learn a narrow, auditable instruction
+space without the world knowledge of a general assistant? The project compares:
 
-## Architecture
+1. TinyStories base pretraining;
+2. continuation-only SFT as a same-budget control;
+3. four-task Instruction SFT;
+4. DPO and reward-selected SFT initialized from Instruction SFT;
+5. conservative DPO-v2 using only hard-success versus hard-failure pairs.
 
-Following the LLaMA architecture strictly:
+The four instruction tasks are story continuation, required-keyword story,
+exact sentence count, and extractive question answering. This is a controlled
+domain experiment, not a general-purpose chatbot.
 
-| Component | Implementation |
-|-----------|---------------|
-| Attention | Causal self-attention with RoPE (Rotary Position Embedding) |
-| FFN | SwiGLU: `down_proj(silu(gate_proj(x)) * up_proj(x))` |
-| Norm | RMSNorm (no bias, no mean centering) |
-| Weight Tying | `lm_head.weight = token_embedding.weight` |
-| All Linear | `bias=False` |
+## Model
 
-**Model config**: 6 layers, 6 heads, 384 embedding dim, ~17M parameters
+| Component | Setting |
+|---|---|
+| Parameters | 17,232,768 |
+| Context | 256 tokens |
+| Vocabulary | 8,000-token BPE |
+| Transformer | 6 layers, 6 heads, 384 hidden dimensions |
+| Position | RoPE |
+| Normalization | Pre-RMSNorm |
+| MLP | SwiGLU, width 1,536 |
+| Attention | causal PyTorch SDPA |
+| Other | bias-free linear layers, tied embedding/LM head |
 
-## Project Structure
+## Repository layout
 
+```text
+configs/       current model and training configurations
+data/          processed TinyStories and generated instruction/alignment data
+docs/          theory, experiment report, and documentation index
+eval/          unified reproducible evaluator and metrics
+model/         decoder-only Transformer implementation
+scripts/       current data preparation/export scripts
+tests/         unit and regression tests
+tokenizer/     BPE training and runtime wrapper
+train/         pretraining, SFT, and DPO trainers
+papers/        tracked reference catalog; local PDFs are ignored by Git
 ```
-minillm-from-scratch/
-├── model/                   # LLaMA architecture (attention, block, gpt, generation)
-├── tokenizer/               # BPE tokenizer (vocab_size=8000)
-├── train/                   # Training scripts (pretrain, sft, dpo, rsft)
-├── eval/                    # Evaluation tools (metrics, loss, generation)
-├── scripts/                 # Data preparation and comparison scripts
-├── configs/                 # YAML configs for each training stage
-├── tests/                   # Unit tests
-├── docs/                    # Theory documentation with formulas
-├── data/                    # Small training data samples
-│   ├── sft_v2/             # SFT data (story continuations)
-│   ├── dpo_v2/             # DPO data (real chosen vs model rejected)
-│   └── rsft/               # RSFT data (model best-of-N selected)
-├── generate_interactive.py  # Interactive text generation
-└── requirements.txt
-```
 
-## Quick Start
+Checkpoints, logs, raw data, local papers, and generated evaluation artifacts
+are intentionally ignored by Git.
 
-### Prerequisites
-
-- Python 3.10+
-- PyTorch 2.0+ with CUDA
-- GPU with 8GB+ VRAM
-- Basic knowledge of Python, PyTorch, and Transformer concepts
-
-### Installation
+## Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/minillm-from-scratch.git
-cd minillm-from-scratch
+conda create -n dl_1 python=3.10
+conda activate dl_1
 pip install -r requirements.txt
 ```
 
-### 5-Minute Demo
+The tested local environment uses PyTorch with CUDA on an 8GB RTX 4060 Laptop
+GPU. CPU execution is supported for tests and small inference runs.
 
-If you have a pretrained checkpoint:
+## Reproduce the pipeline
 
-```bash
-python generate_interactive.py checkpoints/base.pt
-```
+### 1. Tokenizer and base model
 
-Type any prompt like `Once upon a time` and watch the model generate stories!
-
-## Full Pipeline
-
-### Step 1: Prepare Data
-
-Download TinyStories dataset (or use your own text data):
-
-```python
-from datasets import load_dataset
-ds = load_dataset("roneneldan/TinyStories")
-# Save to data/raw/TinyStories-train.txt and data/raw/TinyStories-valid.txt
-```
-
-### Step 2: Train Tokenizer
+Place TinyStories text files under `data/raw/`, then run:
 
 ```bash
 python tokenizer/train_tokenizer.py
-```
-
-Trains a BPE tokenizer with vocab_size=8000 and special tokens (`<pad>`, `<unk>`, `<bos>`, `<eos>`).
-
-### Step 3: Preprocess Data
-
-```bash
 python scripts/prepare_pretrain_data.py
-```
-
-Tokenizes raw text and packs into binary format for efficient training.
-
-### Step 4: Pretrain
-
-```bash
 python train/pretrain.py --config configs/train_pretrain.yaml
 ```
 
-Trains the base model with next-token prediction. Expected: eval loss drops from ~8.0 to ~1.6 over 30k-50k steps (~2-4 hours on RTX 4060).
+The current experiments initialize from `checkpoints/base.pt`.
 
-### Step 5: SFT (Supervised Fine-Tuning)
+### 2. Instruction SFT and fair continuation control
 
 ```bash
-# Build leakage-safe TinyStories instruction data
 python scripts/build_instruction_sft.py
-
-# Train
 python train/sft.py --config configs/train_sft.yaml
-```
 
-The instruction builder creates 20,000 training, 1,000 validation, and 1,000
-test examples across four objectively checkable tasks: continuation (35%),
-required-keyword continuation (25%), exact sentence count (20%), and
-extractive question answering (20%).  Training and evaluation source stories
-are separate, validation/test passages are grouped before splitting, and test
-instructions use held-out paraphrases.  Every example is checked against the
-256-token context limit and its task-specific constraints.  Dataset metadata
-and construction statistics are saved to
-`data/instruction_sft/statistics.json`.
-
-The stable plain-text format avoids changing the pretrained tokenizer:
-
-```text
-Instruction: Continue the story in exactly 2 sentences.
-Input: Lily found a little bird in the garden.
-Response: The bird was cold. Lily took it home.
-```
-
-Only response tokens contribute to the primary SFT loss.  The default config
-runs 7,500 microsteps (1,875 optimizer updates at accumulation 4), which is
-approximately three passes over 20,000 examples at batch size 8.
-
-For a fair single-task control with the same format, size, and training budget:
-
-```bash
 python scripts/build_instruction_sft.py \
   --output-dir data/instruction_sft_continuation \
   --task-mix continuation_only
 python train/sft.py --config configs/train_sft_continuation.yaml
 ```
 
-### Instruction-aligned DPO and RSFT
+Both datasets contain 20,000/1,000/1,000 train/validation/test examples and use
+the same optimization budget. Source groups do not cross dataset splits. Only
+response tokens contribute to the primary SFT objective; a small full-sequence
+pretraining loss reduces forgetting.
 
-After instruction SFT, generate one balanced candidate pool and derive both
-DPO pairs and hard-pass RSFT targets from it:
+### 3. Shared candidate pool and alignment baselines
 
 ```bash
 python scripts/build_instruction_alignment.py
-
-# If a time-limited job stops, retain completed prompts:
-python scripts/build_instruction_alignment.py --resume
-
-# Re-export after changing only reward thresholds (no generation):
-python scripts/build_instruction_alignment.py --export-only
-```
-
-Task-specific rewards use QA exact match/token F1, exact sentence count,
-required-keyword coverage, and continuation surface quality.  Candidates are
-split by source before export.  DPO uses the highest- versus lowest-reward
-distinct response when the reward gap is sufficient; RSFT includes only a
-highest-reward response that passes the task's hard constraint.  Both methods
-therefore use the same prompts, candidates, and reward definition.
-
-```bash
 python train/dpo.py --config configs/train_instruction_dpo.yaml
 python train/sft.py --config configs/train_instruction_rsft.yaml
 ```
 
-Both policies initialize from `checkpoints/instruction_sft/sft.pt`; the legacy
-Base-initialized DPO/RSFT configs are retained only for historical comparison.
+The candidate builder is append-only and supports `--resume`. DPO and RSFT are
+derived from the same generated candidate pool.
 
-### Step 6: DPO (Direct Preference Optimization)
-
-```bash
-# Build DPO data (real text as chosen, model output as rejected)
-python scripts/build_dpo_data.py --input data/raw/TinyStories-valid.txt --output data/dpo_v2/train.jsonl --ckpt checkpoints/base.pt --num_samples 500
-
-# Train
-python train/dpo.py --config configs/train_dpo.yaml
-```
-
-### Step 7: RSFT (Reward-Selected Fine-Tuning)
+### 4. Conservative DPO-v2
 
 ```bash
-# Generate and select best candidates
-python train/rsft_generate.py --config configs/rsft_generate.yaml
-
-# Split into train/valid
-python scripts/split_rsft_data.py
-
-# Train on selected data
-python train/sft.py --config configs/train_rsft.yaml
+python scripts/build_strict_dpo.py
+python train/dpo.py --config configs/train_instruction_dpo_v2.yaml
 ```
 
-## Experimental Findings
+DPO-v2 excludes unconstrained continuation rewards. It retains only QA,
+sentence-count, and keyword pairs where `chosen` passes the hard constraint and
+`rejected` fails it, then balances the three tasks. Checkpoints at 100/200/300/400
+microsteps permit external-metric early stopping; the current selected point is
+200 microsteps.
 
-### Training Collapse on Small Models
+## Evaluation
 
-During our experiments, we encountered a critical issue: **fine-tuning (SFT/DPO) degrades generation quality on small models**.
-
-| Method | Result | Why |
-|--------|--------|-----|
-| Pretrain (50k steps) | Eval loss 1.63, fluent generation | All capacity used for language modeling |
-| SFT | Degrades after ~100 steps | SFT gradient overwrites pretrain knowledge |
-| DPO (bad data) | Severe degradation | Rejected samples were artificial garbage |
-| DPO (good data) | Improved generation | Natural quality gap between chosen/rejected |
-| RSFT | Stable, no degradation | Training data from model's own distribution |
-
-### Data Quality is Decisive for DPO
-
-The most important finding: **the same DPO algorithm on the same model produced completely different results depending on data quality**.
-
-**Bad DPO data** (artificial rejected):
-```
-Chosen:   "She went to the park and played with her friends."
-Rejected: "Ben Ben Ben Ben Ben Ben Ben"  ← artificial garbage
-→ Model learned nothing useful, generation collapsed
-```
-
-**Good DPO data** (model-generated rejected):
-```
-Chosen:   Real TinyStories continuation (ground truth quality)
-Rejected: Model-generated continuation (naturally worse but realistic)
-→ Model learned meaningful preferences, generation improved
-```
-
-This demonstrates that for DPO, **both chosen and rejected must be realistic outputs** with a natural quality gap.
-
-### Key Insight
-
-17M-parameter models have just enough capacity for pretraining. Any fine-tuning that introduces out-of-distribution signals will overwrite the pretrained knowledge. The solution:
-
-1. **RSFT**: safest — only uses model's own outputs
-2. **DPO with good data**: effective — teaches meaningful preferences
-3. **SFT**: riskiest — even with pretrain loss mixing, degradation occurs
-
-For detailed theory and formulas, see [docs/theory.md](docs/theory.md).
-
-## Running Tests
-
-```bash
-pytest tests/ -v
-```
-
-Tests cover: model shapes, causal masking, DPO loss, reward scoring, SFT labels,
-instruction-data constraints, and tokenizer behavior.
-
-## Comprehensive Evaluation
-
-Compare Base, SFT, DPO, and RSFT under one reproducible protocol:
+The evaluator reports each objective separately: TinyStories PPL, held-out
+response NLL, strict-pair preference accuracy/margin, exact sentence count, QA
+exact match, keyword coverage/all-success, repetition, ending rate, diversity,
+throughput, raw generations, and randomized blind A/B pairs.
 
 ```bash
 python eval/comprehensive_eval.py \
-  --max-lm-batches 100 \
+  --model Base=checkpoints/base.pt \
+  --model InstructionSFT=checkpoints/instruction_sft/sft.pt \
+  --model DPOv2=checkpoints/instruction_dpo_v2/dpo_step_200.pt \
+  --model RSFT=checkpoints/instruction_rsft/rsft.pt \
   --seeds 42,123 \
-  --output results/comprehensive_eval
+  --temperature 0.01 \
+  --top-k 1 \
+  --output results/final_evaluation
 ```
 
-The evaluator reports held-out TinyStories NLL/perplexity, response-only SFT
-NLL, DPO preference accuracy and margin, fixed-seed generation metrics, and
-generation throughput. It saves JSON, CSV, Markdown, raw samples, and randomized
-A/B pairs for human or LLM-as-a-judge review. Losses from different objectives
-are kept separate because their numeric values are not directly comparable.
+No single aggregate score is used. In particular, preference accuracy can rise
+while task success or language modeling degrades; the first DPO experiment is
+retained as a documented reward-overoptimization result.
 
-## References
+See [docs/experiment_report.md](docs/experiment_report.md) for the selected
+results and limitations.
 
-- [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)
-- [Direct Preference Optimization](https://arxiv.org/abs/2305.18290)
-- [Training language models to follow instructions with human feedback (InstructGPT)](https://arxiv.org/abs/2203.02155)
-- [TinyStories: How Small Can Language Models Be and Still Speak Coherent English?](https://arxiv.org/abs/2305.07759)
+### Final result snapshot
 
-## License
+The formal run uses 1,000 held-out prompts, two listed generation seeds, and
+greedy top-1 decoding. These are separate metrics, not a combined score.
 
-MIT
+| Model | LM PPL ↓ | Sentence exact ↑ | QA EM ↑ | Keyword all ↑ |
+|---|---:|---:|---:|---:|
+| Base | 5.36 | 0.370 | 0.000 | 0.000 |
+| ContinuationSFT | 5.70 | 0.345 | 0.000 | 0.024 |
+| InstructionSFT | 5.80 | 0.615 | **0.850** | **0.048** |
+| DPOv1 | 6.34 | 0.590 | 0.800 | 0.044 |
+| DPOv2 (step 200) | 5.82 | **0.715** | 0.845 | 0.044 |
+| RSFT | 5.88 | 0.605 | 0.845 | **0.048** |
+
+The main positive result is narrow instruction learning from task-structured
+SFT. DPO-v2 improves exact sentence control with little PPL regression, while
+DPO-v1 demonstrates that stronger preference ranking can coincide with worse
+external metrics. Keyword-all success remains low and is reported as an open
+failure, not hidden behind average coverage.
+
+## Side-by-side demo
+
+```bash
+python demo_compare.py --task qa \
+  --input "Tim did not listen to his mom. Tim played all day." \
+  --question "Who did not listen?"
+```
+
+The demo compares Instruction SFT, DPO-v2, and RSFT by default. It also supports
+`continuation`, `keywords`, and `sentence_count` tasks.
+
+## Tests
+
+```bash
+pytest tests -q
+```
+
+Tests cover causal masking, tensor shapes, shifted labels, prompt masking,
+generation, task rewards, leakage-safe data construction, strict DPO export,
+and the comprehensive evaluator.
+
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Beginner tutorial](docs/tutorial/README.md)
+- [Theory and equations](docs/theory.md)
+- [Experiment report](docs/experiment_report.md)
+- [References and implementation mapping](papers/references_and_analysis.md)
+
+## Scope
+
+This repository demonstrates a complete, resource-constrained research loop.
+It does not claim general knowledge, robust semantic story judging, or
+state-of-the-art benchmark performance. The strongest conclusion concerns
+narrow instruction following under controlled data and compute.

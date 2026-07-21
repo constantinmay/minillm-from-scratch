@@ -1,0 +1,37 @@
+{
+  "candidate_prompts": 1000,
+  "policy": {
+    "tasks": [
+      "question_answering",
+      "sentence_count",
+      "keyword_story"
+    ],
+    "chosen": "hard_pass=true",
+    "rejected": "hard_pass=false",
+    "continuation_excluded": true,
+    "balancing": "downsample_to_smallest_task"
+  },
+  "eligible_pairs": {
+    "question_answering": 40,
+    "sentence_count": 186,
+    "keyword_story": 67
+  },
+  "selected_per_task": 40,
+  "valid_per_task": 4,
+  "train": {
+    "total": 108,
+    "tasks": {
+      "keyword_story": 36,
+      "question_answering": 36,
+      "sentence_count": 36
+    }
+  },
+  "valid": {
+    "total": 12,
+    "tasks": {
+      "question_answering": 4,
+      "sentence_count": 4,
+      "keyword_story": 4
+    }
+  }
+}

@@ -432,7 +432,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/train_dpo.yaml",
+        default="configs/train_instruction_dpo_v2.yaml",
         help="Path to DPO config YAML",
     )
     args = parser.parse_args()
