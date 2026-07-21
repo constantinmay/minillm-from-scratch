@@ -1,0 +1,26 @@
+# MiniLLM Medium Configuration (~17M parameters)
+# LLaMA-style decoder-only Transformer
+
+name: "minillm"
+description: "LLaMA-style decoder-only Transformer, ~17M params"
+
+vocab_size: 8000
+block_size: 256
+n_layer: 6
+n_head: 6
+n_embd: 384
+intermediate_size: 1536   # 4 * n_embd, for SwiGLU
+dropout: 0.0
+
+# Architecture (LLaMA-style)
+norm_type: "rmsnorm"
+activation: "swiglu"
+pos_embedding: "rope"
+bias: false
+weight_tying: true
+
+# RoPE
+rope_theta: 10000.0
+
+# RMSNorm
+rms_norm_eps: 1.0e-6

@@ -1,0 +1,22 @@
+# MiniLLM Tiny Configuration (~9M parameters)
+# For fast testing and debugging
+
+name: "minillm-tiny"
+description: "Tiny config for fast testing"
+
+vocab_size: 8000
+block_size: 128
+n_layer: 4
+n_head: 4
+n_embd: 256
+intermediate_size: 1024   # 4 * n_embd
+dropout: 0.0
+
+norm_type: "rmsnorm"
+activation: "swiglu"
+pos_embedding: "rope"
+bias: false
+weight_tying: true
+
+rope_theta: 10000.0
+rms_norm_eps: 1.0e-6

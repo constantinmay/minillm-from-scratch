@@ -1,0 +1,51 @@
+# Checkpoints (too large for GitHub)
+checkpoints_v2/
+checkpoints_v3/
+data/checkpoints/
+*.pt
+*.pth
+*.safetensors
+
+# Large raw datasets (download separately)
+data/raw/TinyStories-*.txt
+data/processed/train.bin
+data/processed/valid.bin
+
+# Old/replaced data
+data/sft/
+data/dpo/
+data/raw/toy_*.txt
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Results & outputs
+results/
+report/
+
+# Papers (separate)
+papers/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+venv/
+env/
+ENV/

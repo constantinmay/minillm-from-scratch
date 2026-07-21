@@ -1,0 +1,6 @@
+{
+  "block_size": 256,
+  "vocab_size": 8000,
+  "train_blocks": 1887391,
+  "valid_blocks": 18964
+}
