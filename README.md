@@ -1,5 +1,9 @@
 # MiniLLM from Scratch
 
+[English](README.md) | [简体中文](README_zh.md)
+
+> **New to language models?** Start with the [English beginner tutorial](docs/tutorial/README_en.md) or the [中文入门教程](docs/tutorial/README.md). The seven notebooks interleave explanations, equations, source-code links, and runnable checks; no GPU is required for the tutorial exercises.
+
 A reproducible 17.23M-parameter language-model project for studying instruction
 following and preference alignment on one RTX 4060 Laptop GPU. The Transformer,
 training losses, data builders, generation, and evaluation are implemented in
@@ -187,8 +191,9 @@ and the comprehensive evaluator.
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
-- [Beginner tutorial](docs/tutorial/README.md)
+- [Documentation index](docs/README_en.md)
+- [Beginner tutorial — English](docs/tutorial/README_en.md)
+- [初学者教程 — 中文](docs/tutorial/README.md)
 - [Theory and equations](docs/theory.md)
 - [Experiment report](docs/experiment_report.md)
 - [References and implementation mapping](papers/references_and_analysis.md)

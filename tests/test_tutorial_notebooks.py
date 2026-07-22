@@ -7,10 +7,16 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK_DIR = ROOT / "docs" / "tutorial" / "notebooks"
+NOTEBOOK_DIRS = [
+    ROOT / "docs" / "tutorial" / "notebooks",
+    ROOT / "docs" / "tutorial" / "notebooks_en",
+]
+NOTEBOOK_PATHS = [
+    path for directory in NOTEBOOK_DIRS for path in sorted(directory.glob("*.ipynb"))
+]
 
 
-@pytest.mark.parametrize("notebook_path", sorted(NOTEBOOK_DIR.glob("*.ipynb")))
+@pytest.mark.parametrize("notebook_path", NOTEBOOK_PATHS)
 def test_tutorial_notebook_code_cells(notebook_path, monkeypatch):
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     namespace = {"__name__": "__tutorial_test__"}
