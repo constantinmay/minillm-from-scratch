@@ -119,3 +119,31 @@ class TestDPOLoss:
 
         # Logprobs should be negative (log of probability <= 0)
         assert (result < 0).all(), "Log-probabilities should be negative"
+
+    def test_compute_logprobs_mean_sum_and_mask(self):
+        torch.manual_seed(3)
+        model = TinyModel(vocab_size=20, embed_dim=8)
+        input_ids = torch.tensor([[1, 2, 3, 4], [4, 3, 2, 1]])
+        targets = torch.tensor([[-100, 2, 3, -100], [-100, 3, 2, 1]])
+
+        logits = model(input_ids)["logits"]
+        safe = targets.clamp(min=0)
+        token_logps = F.log_softmax(logits, dim=-1).gather(
+            -1, safe.unsqueeze(-1)
+        ).squeeze(-1)
+        mask = targets != -100
+        expected_sum = (token_logps * mask).sum(-1)
+        expected_mean = expected_sum / mask.sum(-1)
+
+        actual_sum = compute_logprobs(model, input_ids, targets, reduction="sum")
+        actual_mean = compute_logprobs(model, input_ids, targets, reduction="mean")
+        assert torch.allclose(actual_sum, expected_sum)
+        assert torch.allclose(actual_mean, expected_mean)
+        assert torch.allclose(compute_logprobs(model, input_ids, targets), actual_mean)
+        assert not torch.allclose(actual_sum[0], actual_sum[1])
+
+    def test_compute_logprobs_rejects_unknown_reduction(self):
+        model = TinyModel()
+        values = torch.ones((1, 2), dtype=torch.long)
+        with pytest.raises(ValueError, match="reduction"):
+            compute_logprobs(model, values, values, reduction="median")

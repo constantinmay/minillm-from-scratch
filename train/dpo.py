@@ -37,11 +37,8 @@ from train.common import (
 )
 
 
-SFT_TEMPLATE = "{prompt} {response}"  # No template - raw text
-
-
-def compute_logprobs(model, input_ids, targets):
-    """Forward pass, compute average log-prob of response tokens (non -100).
+def compute_logprobs(model, input_ids, targets, reduction="mean"):
+    """Compute mean or sum response-token log-probabilities (non ``-100``).
 
     Uses F.log_softmax then gather to extract token log-probabilities.
 
@@ -51,8 +48,10 @@ def compute_logprobs(model, input_ids, targets):
         targets: (B, T) target token IDs, with -100 for masked positions.
 
     Returns:
-        (B,) tensor of per-sample average log-probabilities for response tokens.
+        (B,) tensor of per-sample response log-probabilities.
     """
+    if reduction not in {"mean", "sum"}:
+        raise ValueError("reduction must be 'mean' or 'sum'")
     result = model(input_ids)
     logits = result["logits"]  # (B, T, V)
 
@@ -72,9 +71,8 @@ def compute_logprobs(model, input_ids, targets):
 
     # Compute average log-prob over valid (non-masked) tokens per sample
     token_counts = mask.sum(dim=-1).clamp(min=1.0)  # (B,)
-    avg_logps = (per_token_logps * mask).sum(dim=-1) / token_counts  # (B,)
-
-    return avg_logps
+    summed_logps = (per_token_logps * mask).sum(dim=-1)
+    return summed_logps / token_counts if reduction == "mean" else summed_logps
 
 
 def dpo_loss(
@@ -226,7 +224,7 @@ def collate_dpo(batch):
 
 @torch.no_grad()
 def evaluate_loss(
-    policy_model, ref_model, dataloader, device, beta, max_batches=None
+    policy_model, ref_model, dataloader, device, beta, reduction="mean", max_batches=None
 ):
     """Evaluate DPO loss on a dataloader. Returns average loss."""
     policy_model.eval()
@@ -240,12 +238,20 @@ def evaluate_loss(
         rejected_labels = rejected_labels.to(device)
 
         # Policy model log-probs
-        policy_chosen_logps = compute_logprobs(policy_model, chosen_ids, chosen_labels)
-        policy_rejected_logps = compute_logprobs(policy_model, rejected_ids, rejected_labels)
+        policy_chosen_logps = compute_logprobs(
+            policy_model, chosen_ids, chosen_labels, reduction=reduction
+        )
+        policy_rejected_logps = compute_logprobs(
+            policy_model, rejected_ids, rejected_labels, reduction=reduction
+        )
 
         # Reference model log-probs
-        ref_chosen_logps = compute_logprobs(ref_model, chosen_ids, chosen_labels)
-        ref_rejected_logps = compute_logprobs(ref_model, rejected_ids, rejected_labels)
+        ref_chosen_logps = compute_logprobs(
+            ref_model, chosen_ids, chosen_labels, reduction=reduction
+        )
+        ref_rejected_logps = compute_logprobs(
+            ref_model, rejected_ids, rejected_labels, reduction=reduction
+        )
 
         loss = dpo_loss(
             policy_chosen_logps,
@@ -329,6 +335,9 @@ def train_dpo(config_path: str):
     # Datasets
     max_length = model_config.block_size
     beta = cfg.get("beta", 0.1)
+    logprob_reduction = cfg.get("logprob_reduction", "mean")
+    if logprob_reduction not in {"mean", "sum"}:
+        raise ValueError("logprob_reduction must be 'mean' or 'sum'")
 
     train_dataset = DPODataset(cfg["data_path"], tokenizer, max_length)
     eval_dataset = DPODataset(cfg["eval_data_path"], tokenizer, max_length)
@@ -417,19 +426,19 @@ def train_dpo(config_path: str):
         with autocast(device_type="cuda", dtype=dtype, enabled=use_amp):
             # Policy model log-probs (with gradients)
             policy_chosen_logps = compute_logprobs(
-                policy_model, chosen_ids, chosen_labels
+                policy_model, chosen_ids, chosen_labels, reduction=logprob_reduction
             )
             policy_rejected_logps = compute_logprobs(
-                policy_model, rejected_ids, rejected_labels
+                policy_model, rejected_ids, rejected_labels, reduction=logprob_reduction
             )
 
             # Reference model log-probs (no gradients)
             with torch.no_grad():
                 ref_chosen_logps = compute_logprobs(
-                    ref_model, chosen_ids, chosen_labels
+                    ref_model, chosen_ids, chosen_labels, reduction=logprob_reduction
                 )
                 ref_rejected_logps = compute_logprobs(
-                    ref_model, rejected_ids, rejected_labels
+                    ref_model, rejected_ids, rejected_labels, reduction=logprob_reduction
                 )
 
             loss = dpo_loss(
@@ -462,7 +471,8 @@ def train_dpo(config_path: str):
         # Evaluation
         if step % eval_every == 0:
             eval_loss = evaluate_loss(
-                policy_model, ref_model, eval_loader, device, beta, max_batches=50
+                policy_model, ref_model, eval_loader, device, beta,
+                reduction=logprob_reduction, max_batches=50
             )
             current_lr = scheduler.get_last_lr()[0]
             pbar.write(
