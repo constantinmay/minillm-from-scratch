@@ -34,9 +34,16 @@ def test_tutorial_notebooks_combine_explanation_equations_and_code():
         code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
         assert "$$" in markdown, f"{name} needs at least one displayed equation"
         assert "```" in markdown, f"{name} needs formal code/command examples"
-        assert code_cells, f"{name} needs at least one runnable code cell"
-        for cell in notebook["cells"]:
+        assert len(code_cells) >= 3, f"{name} needs interleaved runnable examples"
+        assert "## 可运行验证" not in markdown, f"{name} must not collect code at the end"
+        for index, cell in enumerate(notebook["cells"]):
             if cell["cell_type"] == "code":
+                assert index > 0
+                previous = notebook["cells"][index - 1]
+                assert previous["cell_type"] == "markdown"
+                explanation = "".join(previous["source"])
+                assert explanation.startswith("### 动手验证")
+                assert len(explanation.splitlines()) >= 3
                 ast.parse("".join(cell["source"]), filename=str(path))
 
 
