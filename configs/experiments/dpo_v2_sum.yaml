@@ -1,3 +1,4 @@
+# Future ablation only. This configuration has not produced reported results.
 stage: dpo
 seed: 42
 model_config: configs/model_config.yaml
@@ -7,7 +8,7 @@ eval_data_path: data/instruction_dpo_v2/valid.jsonl
 policy_init: checkpoints/instruction_sft/sft.pt
 ref_init: checkpoints/instruction_sft/sft.pt
 beta: 0.1
-logprob_reduction: mean
+logprob_reduction: sum
 batch_size: 4
 gradient_accumulation_steps: 4
 max_steps: 400
@@ -19,5 +20,5 @@ max_grad_norm: 1.0
 dtype: float16
 save_every: 100
 eval_every: 50
-checkpoint_dir: checkpoints/instruction_dpo_v2
+checkpoint_dir: checkpoints/experiments/instruction_dpo_v2_sum
 checkpoint_name: dpo.pt

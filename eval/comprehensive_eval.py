@@ -39,6 +39,7 @@ from tokenizer.tokenizer_utils import MiniLLMTokenizer
 from train.dpo import DPODataset, collate_dpo, compute_logprobs, dpo_loss
 from train.pretrain import PretrainDataset
 from train.sft import SFTDataset, collate_sft
+from train.common import require_file, write_run_manifest
 
 
 DEFAULT_MODELS = OrderedDict(
@@ -238,6 +239,31 @@ def required_keyword_coverage(texts, keyword_lists) -> Tuple[float | None, int]:
     return (sum(coverages) / len(coverages) if coverages else None, len(coverages))
 
 
+def bootstrap_mean_interval(
+    values: Sequence[float], samples: int, seed: int
+) -> dict | None:
+    """Return a deterministic sample-level percentile CI for a mean/proportion."""
+    if samples <= 0 or not values:
+        return None
+    rng = random.Random(seed)
+    values = [float(value) for value in values]
+    estimates = []
+    for _ in range(samples):
+        draw = [values[rng.randrange(len(values))] for _ in values]
+        estimates.append(sum(draw) / len(draw))
+    estimates.sort()
+    lower_index = max(0, math.floor(0.025 * (samples - 1)))
+    upper_index = min(samples - 1, math.ceil(0.975 * (samples - 1)))
+    return {
+        "estimate": sum(values) / len(values),
+        "lower": estimates[lower_index],
+        "upper": estimates[upper_index],
+        "confidence": 0.95,
+        "sample_count": len(values),
+        "bootstrap_samples": samples,
+    }
+
+
 @torch.no_grad()
 def evaluate_generation_fixed_seed(
     model: MiniLLM,
@@ -248,6 +274,8 @@ def evaluate_generation_fixed_seed(
     max_new_tokens: int,
     temperature: float,
     top_k: int,
+    bootstrap_samples: int = 0,
+    bootstrap_seed: int = 42,
 ) -> Tuple[dict, List[dict]]:
     texts: List[str] = []
     keyword_lists: List[List[str]] = []
@@ -268,7 +296,7 @@ def evaluate_generation_fixed_seed(
         torch.manual_seed(seed)
         if device == "cuda":
             torch.cuda.manual_seed_all(seed)
-        for record in prompt_records:
+        for prompt_index, record in enumerate(prompt_records):
             prompt_ids = [tokenizer.bos_id()] + tokenizer.encode(
                 record["prompt"] + " ", add_special_tokens=False
             )
@@ -316,6 +344,7 @@ def evaluate_generation_fixed_seed(
             samples.append(
                 {
                     "seed": seed,
+                    "prompt_index": prompt_index,
                     "type": record["type"],
                     "prompt": record["prompt"],
                     "required_words": record["required_words"],
@@ -351,6 +380,79 @@ def evaluate_generation_fixed_seed(
             }
         )
         by_prompt_type[prompt_type] = group_metrics
+
+    # Treat each held-out prompt as one statistical unit. Multiple decoding
+    # seeds are averaged within a prompt and are never counted as independent
+    # test samples.
+    per_prompt: dict[int, list[dict]] = {}
+    for sample in samples:
+        per_prompt.setdefault(sample["prompt_index"], []).append(sample)
+
+    task_metrics = {}
+    confidence_intervals = {}
+    task_aliases = {
+        "continuation": "continuation",
+        "keyword_story": "keywords",
+        "sentence_count": "sentence_count",
+        "format_control": "sentence_count",
+        "question_answering": "qa",
+    }
+    grouped_prompt_values: dict[str, dict[str, list[float]]] = {}
+    for prompt_index, prompt_samples in per_prompt.items():
+        record = prompt_records[prompt_index]
+        task = task_aliases.get(record["type"], record["type"])
+        bucket = grouped_prompt_values.setdefault(task, {})
+        completions = [sample["completion"] for sample in prompt_samples]
+        bucket.setdefault("avg_words", []).append(
+            sum(len(text.split()) for text in completions) / len(completions)
+        )
+        bucket.setdefault("end_rate", []).append(
+            sum(text.rstrip().endswith((".", "!", "?")) for text in completions)
+            / len(completions)
+        )
+        if task == "keywords":
+            required = record["required_words"]
+            coverages = [
+                sum(
+                    bool(re.search(rf"\b{re.escape(word.lower())}\b", text.lower()))
+                    for word in required
+                ) / len(required)
+                for text in completions
+            ]
+            bucket.setdefault("coverage", []).append(sum(coverages) / len(coverages))
+            bucket.setdefault("all_success", []).append(
+                sum(value == 1.0 for value in coverages) / len(coverages)
+            )
+        elif task == "sentence_count":
+            expected = record.get("required_sentence_count")
+            if expected is None and record["type"] == "format_control":
+                expected = 3
+            bucket.setdefault("exact", []).append(
+                sum(count_sentences(text) == int(expected) for text in completions)
+                / len(completions)
+            )
+        elif task == "qa" and record.get("answer"):
+            answer = normalize_short_answer(str(record["answer"]))
+            bucket.setdefault("exact_match", []).append(
+                sum(normalize_short_answer(text) == answer for text in completions)
+                / len(completions)
+            )
+
+    for task, task_values in grouped_prompt_values.items():
+        task_metrics[task] = {
+            "prompts": len(next(iter(task_values.values()))),
+            **{
+                name: sum(values) / len(values)
+                for name, values in task_values.items()
+            },
+        }
+        if bootstrap_samples > 0:
+            confidence_intervals[task] = {
+                name: bootstrap_mean_interval(
+                    values, bootstrap_samples, bootstrap_seed + index
+                )
+                for index, (name, values) in enumerate(task_values.items())
+            }
     metrics.update(
         {
             "keyword_coverage": keyword_coverage,
@@ -373,6 +475,8 @@ def evaluate_generation_fixed_seed(
             "generation_seconds": elapsed,
             "tokens_per_second": generated_token_count / elapsed if elapsed else 0.0,
             "by_prompt_type": by_prompt_type,
+            "by_task": task_metrics,
+            "bootstrap_confidence_intervals": confidence_intervals,
         }
     )
     return metrics, samples
@@ -438,6 +542,7 @@ def write_instruction_report(results: Mapping[str, dict], metadata: dict, path: 
         f"- Generation: temperature={metadata['temperature']}, top_k={metadata['top_k']}, max_new_tokens={metadata['max_new_tokens']}",
         f"- TinyStories LM evaluation batches: `{metadata['max_lm_batches']}`",
         f"- Preference-loss reference: `{metadata['preference_reference']}`",
+        f"- Bootstrap samples: `{metadata['bootstrap_samples']}` (prompt-level; decoding seeds are averaged within each prompt)",
         "",
         "Metrics from different sections have different meanings and are not combined into one score.",
         "",
@@ -487,6 +592,23 @@ def write_instruction_report(results: Mapping[str, dict], metadata: dict, path: 
                 f"{fmt(group['sentence_end_rate'])} | {fmt(group['distinct_2'])} | "
                 f"{fmt(group['keyword_coverage'])} |"
             )
+    lines.extend(
+        [
+            "",
+            "## Task-level Metrics",
+            "",
+            "| Model | Task | Prompts | Primary metrics |",
+            "|---|---|---:|---|",
+        ]
+    )
+    for name, result in results.items():
+        for task, values in result["generation"]["by_task"].items():
+            metrics = ", ".join(
+                f"{key}={fmt(value)}"
+                for key, value in values.items()
+                if key != "prompts"
+            )
+            lines.append(f"| {name} | {task} | {values['prompts']} | {metrics} |")
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -553,7 +675,17 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.01)
     parser.add_argument("--top-k", type=int, default=1)
     parser.add_argument("--beta", type=float, default=0.1)
+    parser.add_argument(
+        "--bootstrap-samples",
+        type=int,
+        default=0,
+        help="Prompt-level bootstrap resamples for 95%% CIs; 0 disables it.",
+    )
+    parser.add_argument("--bootstrap-seed", type=int, default=42)
     args = parser.parse_args()
+
+    if args.bootstrap_samples < 0:
+        raise ValueError("--bootstrap-samples must be non-negative")
 
     models = parse_models(args.model)
     for name, path in models.items():
@@ -563,6 +695,15 @@ def main() -> None:
         raise FileNotFoundError(
             f"Preference reference checkpoint not found: {args.preference_reference}"
         )
+    for path, label in (
+        (args.config, "model config"),
+        (args.tokenizer, "tokenizer"),
+        (args.lm_valid, "LM validation data"),
+        (args.sft_valid, "SFT validation data"),
+        (args.dpo_valid, "DPO validation data"),
+        (args.prompts, "evaluation prompts"),
+    ):
+        require_file(path, label)
     seeds = [int(value.strip()) for value in args.seeds.split(",") if value.strip()]
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -635,6 +776,8 @@ def main() -> None:
             args.max_new_tokens,
             args.temperature,
             args.top_k,
+            args.bootstrap_samples,
+            args.bootstrap_seed,
         )
         print(
             f"Distinct-2={generation_metrics['distinct_2']:.3f}, "
@@ -673,6 +816,8 @@ def main() -> None:
         "sft_valid": args.sft_valid,
         "dpo_valid": args.dpo_valid,
         "preference_reference": args.preference_reference,
+        "bootstrap_samples": args.bootstrap_samples,
+        "bootstrap_seed": args.bootstrap_seed,
     }
     payload = {"metadata": metadata, "results": results}
     (output_dir / "evaluation_results.json").write_text(
@@ -681,6 +826,27 @@ def main() -> None:
     write_csv_summary(results, output_dir / "evaluation_summary.csv")
     write_instruction_report(results, metadata, output_dir / "evaluation_report.md")
     export_blind_pairs(samples_by_model, output_dir)
+    write_run_manifest(
+        output_dir,
+        config_path=args.config,
+        config={
+            "models": dict(models),
+            "tokenizer": args.tokenizer,
+            "lm_valid": args.lm_valid,
+            "sft_valid": args.sft_valid,
+            "dpo_valid": args.dpo_valid,
+            "prompts": args.prompts,
+            "seeds": seeds,
+            "temperature": args.temperature,
+            "top_k": args.top_k,
+            "max_new_tokens": args.max_new_tokens,
+            "bootstrap_samples": args.bootstrap_samples,
+            "bootstrap_seed": args.bootstrap_seed,
+        },
+        seed=args.bootstrap_seed,
+        device=args.device,
+        checkpoint_paths=list(models.values()) + [args.preference_reference],
+    )
     print(f"\nEvaluation artifacts saved to {output_dir}")
 
 

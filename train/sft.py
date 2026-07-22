@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import argparse
 import json
+from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
@@ -24,11 +25,15 @@ from train.common import (
     create_scheduler,
     save_checkpoint,
     load_checkpoint,
+    checkpoint_model_state,
+    make_dataloader_generator,
+    require_file,
+    set_seed,
+    validate_checkpoint_model_config,
+    validate_training_config,
+    write_run_manifest,
     AvgMetric,
 )
-
-
-SFT_TEMPLATE = "{prompt} {response}"  # No instruction prefix - pure story continuation
 
 
 def build_pretrain_targets(input_ids, response_labels):
@@ -66,6 +71,9 @@ class SFTDataset(Dataset):
         tokenizer: MiniLLMTokenizer,
         max_length: int = 256,
     ):
+        require_file(data_path, "SFT dataset")
+        if max_length <= 0:
+            raise ValueError("SFT max_length must be positive")
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.samples = []
@@ -76,13 +84,33 @@ class SFTDataset(Dataset):
                 if not line:
                     continue
                 item = json.loads(line)
+                missing = {field for field in ("prompt", "response") if field not in item}
+                if missing:
+                    raise ValueError(
+                        f"SFT sample is missing {', '.join(sorted(missing))}: {item}"
+                    )
+                if not isinstance(item["prompt"], str) or not isinstance(item["response"], str):
+                    raise ValueError("SFT prompt and response must be strings")
+                if not item["response"].strip():
+                    raise ValueError("SFT response must not be empty")
                 self.samples.append(item)
+
+        if not self.samples:
+            raise ValueError(f"SFT dataset is empty: {Path(data_path).resolve()}")
+        for index in range(len(self.samples)):
+            _, labels = self._encode_item(self.samples[index])
+            if not bool((labels != -100).any()):
+                raise ValueError(
+                    f"SFT sample {index} has no unmasked response target after tokenization"
+                )
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        item = self.samples[idx]
+        return self._encode_item(self.samples[idx])
+
+    def _encode_item(self, item):
         prompt = item["prompt"].strip()
         response = item["response"].strip()
 
@@ -108,6 +136,31 @@ class SFTDataset(Dataset):
         labels[: len(prompt_ids)] = [-100] * len(prompt_ids)
 
         return torch.tensor(input_ids, dtype=torch.long), torch.tensor(labels, dtype=torch.long)
+
+
+def load_sft_initial_weights(
+    model: MiniLLM,
+    base_model_path: str | None,
+    device: str,
+    allow_random_init: bool,
+    model_config: MiniLLMConfig,
+) -> bool:
+    """Load Base/SFT weights, or allow random initialization only explicitly."""
+    if not base_model_path or not os.path.isfile(base_model_path):
+        if allow_random_init:
+            print("Random initialization explicitly enabled with allow_random_init=true.")
+            return False
+        shown = Path(base_model_path or "<not configured>").expanduser().resolve()
+        raise FileNotFoundError(
+            f"Configured SFT base_model_path was not found: {shown}. "
+            "Train/download the Base checkpoint, correct base_model_path, or set "
+            "allow_random_init: true only for an intentional scratch experiment."
+        )
+    checkpoint = load_checkpoint(base_model_path, device)
+    validate_checkpoint_model_config(checkpoint, model_config, "SFT base checkpoint")
+    model.load_state_dict(checkpoint_model_state(checkpoint))
+    print(f"Loaded base model from {base_model_path}")
+    return True
 
 
 def collate_sft(batch):
@@ -148,11 +201,18 @@ def train_sft(config_path: str):
     """
     # Load config
     cfg = load_config(config_path)
+    seed = int(cfg.get("seed", 42))
+    set_seed(seed)
     device = get_device()
     print(f"Using device: {device}")
 
     # Model config
     model_config = MiniLLMConfig.from_yaml(cfg["model_config"])
+
+    validate_training_config(cfg, model_config.block_size)
+    require_file(cfg["tokenizer_path"], "tokenizer")
+    require_file(cfg["data_path"], "SFT training dataset")
+    require_file(cfg["eval_data_path"], "SFT validation dataset")
 
     # Tokenizer
     tokenizer = MiniLLMTokenizer(cfg["tokenizer_path"])
@@ -160,12 +220,13 @@ def train_sft(config_path: str):
     # Load base model
     model = MiniLLM(model_config).to(device)
     base_model_path = cfg.get("base_model_path")
-    if base_model_path and os.path.exists(base_model_path):
-        checkpoint = load_checkpoint(base_model_path, device)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        print(f"Loaded base model from {base_model_path}")
-    else:
-        print("Training from scratch (no base model found).")
+    load_sft_initial_weights(
+        model,
+        base_model_path,
+        device,
+        bool(cfg.get("allow_random_init", False)),
+        model_config,
+    )
 
     print(f"Model parameters: {model.num_params():,}")
 
@@ -184,6 +245,7 @@ def train_sft(config_path: str):
         num_workers=0,
         pin_memory=True,
         collate_fn=collate_sft,
+        generator=make_dataloader_generator(seed),
     )
     eval_loader = DataLoader(
         eval_dataset,
@@ -227,6 +289,14 @@ def train_sft(config_path: str):
     checkpoint_stem = os.path.splitext(checkpoint_name)[0]
 
     os.makedirs(checkpoint_dir, exist_ok=True)
+    write_run_manifest(
+        checkpoint_dir,
+        config_path=config_path,
+        config=cfg,
+        seed=seed,
+        device=device,
+        checkpoint_paths=[base_model_path] if base_model_path else [],
+    )
 
     step = 0
     loss_metric = AvgMetric()
@@ -295,12 +365,18 @@ def train_sft(config_path: str):
             ckpt_path = os.path.join(
                 checkpoint_dir, f"{checkpoint_stem}_step_{step}.pt"
             )
-            save_checkpoint(model, optimizer, scheduler, step, ckpt_path, model_config)
+            save_checkpoint(
+                model, optimizer, scheduler, step, ckpt_path, model_config,
+                scaler=scaler, training_config=cfg, checkpoint_type="sft_training",
+            )
             pbar.write(f"Checkpoint saved: {ckpt_path}")
 
     # Final checkpoint
     final_path = os.path.join(checkpoint_dir, checkpoint_name)
-    save_checkpoint(model, optimizer, scheduler, step, final_path, model_config)
+    save_checkpoint(
+        model, optimizer, scheduler, step, final_path, model_config,
+        scaler=scaler, training_config=cfg, checkpoint_type="sft_training",
+    )
     pbar.write(f"Final checkpoint saved: {final_path}")
     pbar.close()
 
