@@ -1,0 +1,2 @@
+# Test and local development tools.
+pytest>=7.4.0
