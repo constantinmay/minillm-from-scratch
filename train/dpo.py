@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import argparse
 import json
+from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
@@ -25,6 +26,13 @@ from train.common import (
     create_scheduler,
     save_checkpoint,
     load_checkpoint,
+    checkpoint_model_state,
+    make_dataloader_generator,
+    require_file,
+    set_seed,
+    validate_checkpoint_model_config,
+    validate_training_config,
+    write_run_manifest,
     AvgMetric,
 )
 
@@ -112,6 +120,9 @@ class DPODataset(Dataset):
         tokenizer: MiniLLMTokenizer,
         max_length: int = 256,
     ):
+        require_file(data_path, "DPO dataset")
+        if max_length <= 0:
+            raise ValueError("DPO max_length must be positive")
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.samples = []
@@ -122,7 +133,29 @@ class DPODataset(Dataset):
                 if not line:
                     continue
                 item = json.loads(line)
+                required = ("prompt", "chosen", "rejected")
+                missing = {field for field in required if field not in item}
+                if missing:
+                    raise ValueError(
+                        f"DPO sample is missing {', '.join(sorted(missing))}: {item}"
+                    )
+                if any(not isinstance(item[field], str) for field in required):
+                    raise ValueError("DPO prompt, chosen, and rejected must be strings")
+                if not item["chosen"].strip() or not item["rejected"].strip():
+                    raise ValueError("DPO chosen and rejected responses must not be empty")
+                if item["chosen"].strip() == item["rejected"].strip():
+                    raise ValueError("DPO chosen and rejected responses must differ")
                 self.samples.append(item)
+
+        if not self.samples:
+            raise ValueError(f"DPO dataset is empty: {Path(data_path).resolve()}")
+        for index, item in enumerate(self.samples):
+            for role in ("chosen", "rejected"):
+                _, labels = self._tokenize_pair(item["prompt"], item[role])
+                if not bool((labels != -100).any()):
+                    raise ValueError(
+                        f"DPO sample {index} {role} has no unmasked response target"
+                    )
 
     def __len__(self):
         return len(self.samples)
@@ -226,6 +259,29 @@ def evaluate_loss(
     return sum(losses) / len(losses) if losses else float("inf")
 
 
+def load_dpo_checkpoint(
+    model: MiniLLM,
+    path: str,
+    device: str,
+    model_config: MiniLLMConfig,
+    role: str,
+) -> dict:
+    """Require and load a compatible DPO policy/reference initialization."""
+    try:
+        require_file(path, f"DPO {role} checkpoint")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"DPO {role} checkpoint is required and was not found: "
+            f"{Path(path).expanduser().resolve()}. Train/download the intended "
+            f"{role} checkpoint and update the configuration before starting DPO."
+        ) from exc
+    checkpoint = load_checkpoint(path, device)
+    validate_checkpoint_model_config(checkpoint, model_config, f"DPO {role} checkpoint")
+    model.load_state_dict(checkpoint_model_state(checkpoint))
+    print(f"Loaded {role} model from {path}")
+    return checkpoint
+
+
 def train_dpo(config_path: str):
     """DPO training loop.
 
@@ -236,11 +292,18 @@ def train_dpo(config_path: str):
     """
     # Load config
     cfg = load_config(config_path)
+    seed = int(cfg.get("seed", 42))
+    set_seed(seed)
     device = get_device()
     print(f"Using device: {device}")
 
     # Model config
     model_config = MiniLLMConfig.from_yaml(cfg["model_config"])
+
+    validate_training_config(cfg, model_config.block_size)
+    require_file(cfg["tokenizer_path"], "tokenizer")
+    require_file(cfg["data_path"], "DPO training dataset")
+    require_file(cfg["eval_data_path"], "DPO validation dataset")
 
     # Tokenizer
     tokenizer = MiniLLMTokenizer(cfg["tokenizer_path"])
@@ -248,22 +311,12 @@ def train_dpo(config_path: str):
     # Create policy model (trainable)
     policy_model = MiniLLM(model_config).to(device)
     policy_init = cfg["policy_init"]
-    if os.path.exists(policy_init):
-        ckpt = load_checkpoint(policy_init, device)
-        policy_model.load_state_dict(ckpt["model_state_dict"])
-        print(f"Loaded policy model from {policy_init}")
-    else:
-        print(f"Warning: policy init path {policy_init} not found, using random init.")
+    load_dpo_checkpoint(policy_model, policy_init, device, model_config, "policy")
 
     # Create reference model (frozen)
     ref_model = MiniLLM(model_config).to(device)
     ref_init = cfg.get("ref_init", policy_init)
-    if os.path.exists(ref_init):
-        ckpt = load_checkpoint(ref_init, device)
-        ref_model.load_state_dict(ckpt["model_state_dict"])
-        print(f"Loaded reference model from {ref_init}")
-    else:
-        print(f"Warning: ref init path {ref_init} not found, using random init.")
+    load_dpo_checkpoint(ref_model, ref_init, device, model_config, "reference")
 
     # Freeze reference model
     ref_model.eval()
@@ -290,6 +343,7 @@ def train_dpo(config_path: str):
         num_workers=0,
         pin_memory=True,
         collate_fn=collate_dpo,
+        generator=make_dataloader_generator(seed),
     )
     eval_loader = DataLoader(
         eval_dataset,
@@ -332,6 +386,14 @@ def train_dpo(config_path: str):
     checkpoint_name = cfg.get("checkpoint_name", "dpo.pt")
 
     os.makedirs(checkpoint_dir, exist_ok=True)
+    write_run_manifest(
+        checkpoint_dir,
+        config_path=config_path,
+        config=cfg,
+        seed=seed,
+        device=device,
+        checkpoint_paths=[policy_init, ref_init],
+    )
 
     step = 0
     loss_metric = AvgMetric()
@@ -414,13 +476,17 @@ def train_dpo(config_path: str):
         if step % save_every == 0:
             ckpt_path = os.path.join(checkpoint_dir, f"dpo_step_{step}.pt")
             save_checkpoint(
-                policy_model, optimizer, scheduler, step, ckpt_path, model_config
+                policy_model, optimizer, scheduler, step, ckpt_path, model_config,
+                scaler=scaler, training_config=cfg, checkpoint_type="dpo_training",
             )
             pbar.write(f"Checkpoint saved: {ckpt_path}")
 
     # Final checkpoint
     final_path = os.path.join(checkpoint_dir, checkpoint_name)
-    save_checkpoint(policy_model, optimizer, scheduler, step, final_path, model_config)
+    save_checkpoint(
+        policy_model, optimizer, scheduler, step, final_path, model_config,
+        scaler=scaler, training_config=cfg, checkpoint_type="dpo_training",
+    )
     pbar.write(f"Final checkpoint saved: {final_path}")
     pbar.close()
 

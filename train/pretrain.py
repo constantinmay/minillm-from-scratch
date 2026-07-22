@@ -7,7 +7,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import argparse
 import json
-import math
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
@@ -30,6 +29,14 @@ from train.common import (
     create_scheduler,
     save_checkpoint,
     load_checkpoint,
+    checkpoint_model_state,
+    make_dataloader_generator,
+    require_file,
+    restore_rng_state,
+    set_seed,
+    validate_checkpoint_model_config,
+    validate_training_config,
+    write_run_manifest,
     AvgMetric,
 )
 
@@ -42,8 +49,16 @@ class PretrainDataset(Dataset):
     """
 
     def __init__(self, data_path: str, block_size: int):
+        require_file(data_path, "pretraining token data")
+        if block_size <= 0:
+            raise ValueError("block_size must be positive")
         self.data = np.memmap(data_path, dtype=np.uint16, mode="r")
         self.block_size = block_size
+        if len(self.data) <= block_size:
+            raise ValueError(
+                f"Pretraining dataset must contain more than {block_size} tokens: "
+                f"{os.path.abspath(data_path)}"
+            )
 
     def __len__(self):
         # Number of full sequences we can extract
@@ -110,11 +125,18 @@ def train_pretrain(config_path: str, resume_from: str = None):
     """
     # Load config
     cfg = load_config(config_path)
+    seed = int(cfg.get("seed", 42))
+    set_seed(seed)
     device = get_device()
     print(f"Using device: {device}")
 
     # Model config
     model_config = MiniLLMConfig.from_yaml(cfg["model_config"])
+
+    validate_training_config(cfg, model_config.block_size)
+    require_file(cfg["tokenizer_path"], "tokenizer")
+    require_file(cfg["data_path"], "pretraining dataset")
+    require_file(cfg["eval_data_path"], "pretraining validation dataset")
 
     # Tokenizer
     tokenizer = MiniLLMTokenizer(cfg["tokenizer_path"])
@@ -131,12 +153,14 @@ def train_pretrain(config_path: str, resume_from: str = None):
     batch_size = cfg["batch_size"]
     grad_accum_steps = cfg["gradient_accumulation_steps"]
 
+    train_generator = make_dataloader_generator(seed)
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
         pin_memory=True,
+        generator=train_generator,
     )
     eval_loader = DataLoader(
         eval_dataset,
@@ -182,16 +206,32 @@ def train_pretrain(config_path: str, resume_from: str = None):
     checkpoint_dir = cfg.get("checkpoint_dir", "checkpoints")
 
     os.makedirs(checkpoint_dir, exist_ok=True)
+    manifest_checkpoints = [resume_from] if resume_from else []
+    write_run_manifest(
+        checkpoint_dir,
+        config_path=config_path,
+        config=cfg,
+        seed=seed,
+        device=device,
+        checkpoint_paths=manifest_checkpoints,
+    )
 
     # Resume from checkpoint if provided
     step = 0
+    resume_dataloader_state = None
     if resume_from is not None:
         ckpt = load_checkpoint(resume_from, device)
-        model.load_state_dict(ckpt["model_state_dict"])
-        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        validate_checkpoint_model_config(ckpt, model_config, "pretraining checkpoint")
+        model.load_state_dict(checkpoint_model_state(ckpt))
+        if ckpt.get("optimizer_state_dict") is not None:
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         if scheduler is not None and ckpt.get("scheduler_state_dict"):
             scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        if ckpt.get("scaler_state_dict"):
+            scaler.load_state_dict(ckpt["scaler_state_dict"])
         step = ckpt.get("step", 0)
+        restore_rng_state(ckpt.get("rng_state"))
+        resume_dataloader_state = ckpt.get("dataloader_state")
         print(f"Resumed from {resume_from} at step {step}")
 
     loss_metric = AvgMetric()
@@ -202,14 +242,31 @@ def train_pretrain(config_path: str, resume_from: str = None):
     log_records = []  # list of dicts: {"step": ..., "train_loss": ..., "eval_loss": ..., "lr": ...}
 
     pbar = tqdm(total=max_steps, desc="Pretraining")
+    batches_consumed = 0
+    if resume_dataloader_state:
+        epoch_generator_state = resume_dataloader_state.get("epoch_generator_state")
+        batches_consumed = int(resume_dataloader_state.get("batches_consumed", 0))
+        if epoch_generator_state is not None:
+            train_generator.set_state(epoch_generator_state)
+    epoch_generator_state = train_generator.get_state()
     data_iter = iter(train_loader)
+    for _ in range(batches_consumed):
+        try:
+            next(data_iter)
+        except StopIteration as exc:
+            raise ValueError(
+                "Checkpoint dataloader cursor exceeds the current dataset"
+            ) from exc
 
     while step < max_steps:
         try:
             input_ids, targets = next(data_iter)
         except StopIteration:
+            epoch_generator_state = train_generator.get_state()
             data_iter = iter(train_loader)
+            batches_consumed = 0
             input_ids, targets = next(data_iter)
+        batches_consumed += 1
 
         input_ids = input_ids.to(device)
         targets = targets.to(device)
@@ -265,7 +322,15 @@ def train_pretrain(config_path: str, resume_from: str = None):
             if eval_loss < best_eval_loss:
                 best_eval_loss = eval_loss
                 best_path = os.path.join(checkpoint_dir, "base.pt")
-                save_checkpoint(model, optimizer, scheduler, step, best_path, model_config)
+                save_checkpoint(
+                    model, optimizer, scheduler, step, best_path, model_config,
+                    scaler=scaler, dataloader_state={
+                        "epoch_generator_state": epoch_generator_state,
+                        "batches_consumed": batches_consumed,
+                    },
+                    training_config=cfg,
+                    checkpoint_type="pretrain_training",
+                )
                 pbar.write(f"New best model! Eval Loss: {eval_loss:.4f} -> {best_path}")
 
         # Generate samples
@@ -282,12 +347,28 @@ def train_pretrain(config_path: str, resume_from: str = None):
         # Save periodic checkpoint
         if step % save_every == 0:
             ckpt_path = os.path.join(checkpoint_dir, f"pretrain_step_{step}.pt")
-            save_checkpoint(model, optimizer, scheduler, step, ckpt_path, model_config)
+            save_checkpoint(
+                model, optimizer, scheduler, step, ckpt_path, model_config,
+                scaler=scaler, dataloader_state={
+                    "epoch_generator_state": epoch_generator_state,
+                    "batches_consumed": batches_consumed,
+                },
+                training_config=cfg,
+                checkpoint_type="pretrain_training",
+            )
             pbar.write(f"Checkpoint saved: {ckpt_path}")
 
     # Final checkpoint
     final_path = os.path.join(checkpoint_dir, "pretrain_final.pt")
-    save_checkpoint(model, optimizer, scheduler, step, final_path, model_config)
+    save_checkpoint(
+        model, optimizer, scheduler, step, final_path, model_config,
+        scaler=scaler, dataloader_state={
+            "epoch_generator_state": epoch_generator_state,
+            "batches_consumed": batches_consumed,
+        },
+        training_config=cfg,
+        checkpoint_type="pretrain_training",
+    )
     pbar.write(f"Final checkpoint saved: {final_path}")
     pbar.close()
 

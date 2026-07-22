@@ -1,4 +1,5 @@
 stage: pretrain
+seed: 42
 model_config: configs/model_config.yaml
 tokenizer_path: tokenizer/minillm_tokenizer.json
 data_path: data/processed/train.bin

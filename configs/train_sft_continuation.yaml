@@ -1,9 +1,11 @@
 stage: sft
+seed: 42
 model_config: configs/model_config.yaml
 tokenizer_path: tokenizer/minillm_tokenizer.json
 data_path: data/instruction_sft_continuation/train.jsonl
 eval_data_path: data/instruction_sft_continuation/valid.jsonl
 base_model_path: checkpoints/base.pt
+allow_random_init: false
 batch_size: 8
 gradient_accumulation_steps: 4
 max_steps: 7500
