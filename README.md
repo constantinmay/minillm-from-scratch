@@ -2,6 +2,11 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
+[![CPU tests](https://github.com/constantinmay/minillm-from-scratch/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/constantinmay/minillm-from-scratch/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
+[![Stable version: v1.1.0](https://img.shields.io/badge/stable-v1.1.0-green.svg)](https://github.com/constantinmay/minillm-from-scratch/tree/v1.1.0)
+
 > **New to language models?** Start with the [English beginner tutorial](docs/tutorial/README_en.md) or the [中文入门教程](docs/tutorial/README.md). The seven notebooks interleave explanations, equations, source-code links, and runnable checks; no GPU is required for the tutorial exercises.
 
 MiniLLM from Scratch is a hands-on project for building and training a small
@@ -11,6 +16,16 @@ decoder-only Transformer, base pretraining, instruction SFT, preference
 alignment, generation, and evaluation. The reference model has 17.23M
 parameters and was trained on one 8GB RTX 4060 Laptop GPU using plain PyTorch,
 without Hugging Face Transformers.
+
+## Choose your path
+
+- **Learn the concepts:** Run the bilingual tutorials. No GPU or pretrained
+  checkpoint is required.
+- **Try the trained models:** Download the tokenizer and inference checkpoints
+  from a GitHub Release, then run `demo_compare.py`. **Release assets will be
+  published with the next version; they are not published yet.**
+- **Reproduce the experiments:** Prepare TinyStories and run tokenizer
+  training, pretraining, SFT, and alignment stages.
 
 ## Why this project?
 
@@ -88,6 +103,52 @@ pip install -r requirements.txt
 
 The tested local environment uses PyTorch with CUDA on an 8GB RTX 4060 Laptop
 GPU. CPU execution is supported for tests and small inference runs.
+
+## Reproducibility and reliability
+
+- Formal training configurations set `seed` explicitly. Python, NumPy,
+  PyTorch, CUDA, and DataLoader shuffling use the same configured seed.
+- SFT, DPO, and pretraining resume fail fast when a required checkpoint is
+  missing instead of silently starting from random weights.
+- Checkpoint v2 stores model, optimizer, scheduler, GradScaler, RNG, training
+  configuration, and DataLoader progress. Legacy checkpoints remain loadable.
+- Single-process pretraining resume restores the next shuffled batch as well as
+  the training state; a tiny CPU regression checks the next batch, loss, and
+  model parameters.
+- GitHub Actions runs the complete test suite with CPU-only PyTorch.
+
+A fixed seed improves repeatability on a given setup but does not promise
+bitwise equality across hardware or PyTorch/CUDA versions. Multi-GPU/DDP and
+cross-hardware bitwise reproducibility are not currently guaranteed.
+
+### DPO response log-probability reduction
+
+The reported DPO experiments use the token-wise `mean` reduction. `sum` is
+available only as an interface for future ablations; neither reduction is
+claimed to be universally better. Select it explicitly in a DPO config:
+
+```yaml
+logprob_reduction: mean  # or: sum
+```
+
+Changing this option does not rewrite the existing experiment report or its
+results.
+
+### Bootstrap confidence intervals
+
+The comprehensive evaluator can optionally resample held-out prompts:
+
+```bash
+python eval/comprehensive_eval.py \
+  --model Base=checkpoints/base.pt \
+  --bootstrap-samples 1000 \
+  --bootstrap-seed 42
+```
+
+This sample-level bootstrap describes sampling uncertainty on the current test
+set; it is not a guarantee of cross-dataset or cross-domain generalization.
+Multiple labels reported for one greedily decoded prompt are not treated as
+independent statistical samples.
 
 ## Reproduce the pipeline
 
@@ -215,9 +276,10 @@ The demo compares Instruction SFT, DPO-v2, and RSFT by default. It also supports
 pytest tests -q
 ```
 
-Tests cover causal masking, tensor shapes, shifted labels, prompt masking,
-generation, task rewards, leakage-safe data construction, strict DPO export,
-and the comprehensive evaluator.
+The current suite contains 80 tests covering causal masking, tensor shapes,
+shifted labels, prompt masking, generation, task rewards, leakage-safe data
+construction, strict DPO export, checkpoint recovery, inference export, the
+comparison demo, and the comprehensive evaluator.
 
 ## Documentation
 
@@ -226,6 +288,9 @@ and the comprehensive evaluator.
 - [初学者教程 — 中文](docs/tutorial/README.md)
 - [Theory and equations](docs/theory.md)
 - [Experiment report](docs/experiment_report.md)
+- [Model card](MODEL_CARD.md)
+- [Release guide](docs/release.md)
+- [Next-version release notes](RELEASE_NOTES.md)
 - [References and implementation mapping](papers/references_and_analysis.md)
 
 ## Scope
@@ -235,3 +300,7 @@ not claim general knowledge, robust semantic story judging, or state-of-the-art
 benchmark performance. Its strongest result is that the complete pipeline can
 be made observable on consumer hardware, with narrow instruction learning as a
 useful controlled experiment.
+
+## License
+
+This project is available under the [MIT License](LICENSE).
