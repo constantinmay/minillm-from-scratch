@@ -33,6 +33,7 @@ htmlcov/
 results/
 report/
 logs/
+release_assets/
 
 # Papers: keep the lightweight catalog in Git, ignore local source documents
 papers/*
