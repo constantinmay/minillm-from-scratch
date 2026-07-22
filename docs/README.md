@@ -12,7 +12,7 @@
 - [`tutorial/README_en.md`](tutorial/README_en.md)：English beginner course index。
 - [`tutorial/notebooks_en/`](tutorial/notebooks_en/)：英文七章教程，与中文版本共享代码单元。
 - [`theory.md`](theory.md)：核心公式与算法速查。
-- [`experiment_report.md`](experiment_report.md)：正式实验设置、实测结果、结论和限制。
+- [`experiment_report.md`](experiment_report.md)：训练设置、实测结果、主要观察和结果限制。
 
 ## 论文资料
 
@@ -25,4 +25,4 @@
 - `../logs/`：训练及评测日志。
 - `../checkpoints/`：模型权重。
 
-以上实验产物和论文 PDF 默认不进入 Git；GitHub 仓库跟踪代码、配置、小型数据、实验报告和可执行教程。
+以上实验产物和论文 PDF 默认不进入 Git；GitHub 仓库跟踪代码、配置、小型数据、训练与评测报告和可执行教程。

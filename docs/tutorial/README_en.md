@@ -2,11 +2,28 @@
 
 [English](README_en.md) | [简体中文](README.md)
 
-This is a seven-chapter, notebook-first course. Each concept follows the same rhythm:
+This is a seven-chapter, notebook-first course for completing the MiniLLM
+training pipeline on limited hardware. Frontier-scale training is far beyond
+most beginners' reach, but a deliberately small model still lets us observe how
+random output acquires grammar, what Base and SFT learn, and why preference
+metrics can be misleading.
+
+Each concept follows the same rhythm:
 
 > intuition → equation → what the symbols mean → corresponding project code → a runnable check
 
 You do not need a GPU for the course exercises. Long training commands appear as Markdown examples and never run automatically.
+
+By the end, you should be able to reach three practical milestones:
+
+1. explain next-token prediction from both its equation and implementation;
+2. train Base and use loss, PPL, and samples to judge whether it has begun to
+   learn basic grammar;
+3. explain how SFT teaches a limited task protocol and why DPO/RSFT must be
+   checked with external metrics.
+
+Chapters 01–04 are the main path. DPO and RSFT in Chapter 05 are optional
+advanced extensions; they are not required to complete Base and SFT first.
 
 ## What should I know first?
 
@@ -44,8 +61,8 @@ Open Chapter 1 and run cells from top to bottom. A tutorial cell should finish i
 | 03 | How does a stable pretraining loop work? | 45–60 min | [Open](notebooks_en/03_pretraining.ipynb) | [打开](notebooks/03_pretraining.ipynb) |
 | 04 | How does response-only SFT teach a narrow instruction protocol? | 45–60 min | [Open](notebooks_en/04_sft.ipynb) | [打开](notebooks/04_sft.ipynb) |
 | 05 | Where does DPO come from, and how do preference data and RSFT work? | 60–90 min | [Open](notebooks_en/05_alignment.ipynb) | [打开](notebooks/05_alignment.ipynb) |
-| 06 | Which metrics answer which research questions? | 45–60 min | [Open](notebooks_en/06_evaluation.ipynb) | [打开](notebooks/06_evaluation.ipynb) |
-| 07 | How do I reproduce, interpret, and extend the experiment? | 30–45 min | [Open](notebooks_en/07_reproduce.ipynb) | [打开](notebooks/07_reproduce.ipynb) |
+| 06 | Which metrics answer which practical questions? | 45–60 min | [Open](notebooks_en/06_evaluation.ipynb) | [打开](notebooks/06_evaluation.ipynb) |
+| 07 | How do I reproduce, interpret, and extend the full pipeline? | 30–45 min | [Open](notebooks_en/07_reproduce.ipynb) | [打开](notebooks/07_reproduce.ipynb) |
 
 Recommended order: `01 → 02 → 03 → 04 → 05 → 06 → 07`. If you already understand Transformers, start at Chapter 04 but still run the shifted-label check in Chapter 01.
 
@@ -60,7 +77,7 @@ Read Chapters 01–06 and run the small checks. This path explains the mathemati
 Finish Chapters 01–06, then use Chapter 07 together with:
 
 - [root README](../../README.md) for exact commands;
-- [experiment report](../experiment_report.md) for the protocol and results;
+- [training and evaluation report](../experiment_report.md) for the protocol and results;
 - [paper-to-code map](../../papers/references_and_analysis.md) for primary sources.
 
 ## How to read a chapter

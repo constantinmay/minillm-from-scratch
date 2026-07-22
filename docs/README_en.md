@@ -10,7 +10,7 @@ This directory belongs to `minillm-from-scratch`; the Git root is one level abov
 - [`tutorial/README_en.md`](tutorial/README_en.md): seven-chapter English beginner course.
 - [`tutorial/README.md`](tutorial/README.md): 七章中文初学者教程。
 - [`theory.md`](theory.md): concise theory and equation reference in Chinese.
-- [`experiment_report.md`](experiment_report.md): formal protocol, measured results, conclusions, and limitations in Chinese.
+- [`experiment_report.md`](experiment_report.md): training setup, measured results, observations, and limitations in Chinese.
 
 ## Papers
 
@@ -23,4 +23,4 @@ This directory belongs to `minillm-from-scratch`; the Git root is one level abov
 - `../logs/`: training and evaluation logs.
 - `../checkpoints/`: model weights.
 
-Large artifacts and paper PDFs are not committed. Git tracks code, configurations, small datasets, the experiment report, and executable bilingual tutorials.
+Large artifacts and paper PDFs are not committed. Git tracks code, configurations, small datasets, the training and evaluation report, and executable bilingual tutorials.

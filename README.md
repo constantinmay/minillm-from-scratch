@@ -4,25 +4,47 @@
 
 > **New to language models?** Start with the [English beginner tutorial](docs/tutorial/README_en.md) or the [中文入门教程](docs/tutorial/README.md). The seven notebooks interleave explanations, equations, source-code links, and runnable checks; no GPU is required for the tutorial exercises.
 
-A reproducible 17.23M-parameter language-model project for studying instruction
-following and preference alignment on one RTX 4060 Laptop GPU. The Transformer,
-training losses, data builders, generation, and evaluation are implemented in
-PyTorch without Hugging Face Transformers.
+MiniLLM from Scratch is a hands-on project for building and training a small
+language model on limited hardware. Instead of stopping at equations or calling
+a ready-made model API, you implement and run the complete pipeline: tokenizer,
+decoder-only Transformer, base pretraining, instruction SFT, preference
+alignment, generation, and evaluation. The reference model has 17.23M
+parameters and was trained on one 8GB RTX 4060 Laptop GPU using plain PyTorch,
+without Hugging Face Transformers.
 
-## Research question
+## Why this project?
 
-Can a very small TinyStories base model learn a narrow, auditable instruction
-space without the world knowledge of a general assistant? The project compares:
+Modern frontier language models are trained on clusters that most learners
+cannot access, while even billion-parameter training is often out of reach on a
+consumer GPU. This repository asks a more practical question: **can a beginner
+with one modest GPU still experience every important stage of language-model
+training, observe the model change, and measure what worked?**
 
-1. TinyStories base pretraining;
-2. continuation-only SFT as a same-budget control;
-3. four-task Instruction SFT;
-4. DPO and reward-selected SFT initialized from Instruction SFT;
-5. conservative DPO-v2 using only hard-success versus hard-failure pairs.
+The goal is not to build a general assistant or claim state-of-the-art results.
+It is to turn the whole training pipeline into something small enough to read,
+run, modify, and debug yourself.
 
-The four instruction tasks are story continuation, required-keyword story,
-exact sentence count, and extractive question answering. This is a controlled
-domain experiment, not a general-purpose chatbot.
+```text
+TinyStories → BPE tokenizer → Base pretraining → Instruction SFT
+            → DPO / RSFT → generation, metrics, and error analysis
+```
+
+In one local RTX 4060 run, the most memorable milestone was seeing the base
+model begin to produce short text with recognizable English grammar after
+roughly half an hour. This is an approximate observation from that run, not a
+hardware-independent speed guarantee; the loss history and final samples kept
+with the local run are the evidence behind this observation.
+
+## What changes during training?
+
+1. **Base pretraining** turns random token sequences into TinyStories-style
+   English and teaches next-token prediction.
+2. **Instruction SFT** teaches four limited task formats: continuation,
+   required-keyword stories, exact sentence count, and extractive QA.
+3. **DPO and RSFT** show how preference data can alter behavior—and how a proxy
+   preference score can improve while useful task metrics get worse.
+4. **Evaluation** separates language fluency, instruction success, preference
+   ranking, and generation quality instead of hiding them in one score.
 
 ## Model
 
@@ -122,12 +144,19 @@ sentence-count, and keyword pairs where `chosen` passes the hard constraint and
 microsteps permit external-metric early stopping; the current selected point is
 200 microsteps.
 
-## Evaluation
+## How evaluation works
 
-The evaluator reports each objective separately: TinyStories PPL, held-out
-response NLL, strict-pair preference accuracy/margin, exact sentence count, QA
-exact match, keyword coverage/all-success, repetition, ending rate, diversity,
-throughput, raw generations, and randomized blind A/B pairs.
+There is no single trustworthy “LLM score.” Each metric answers a different
+question:
+
+| What we want to know | Metric | Interpretation |
+|---|---|---|
+| Did Base learn next-token prediction? | validation NLL / PPL | lower is better |
+| Does a model fit held-out task responses? | response NLL | lower is better |
+| Does it obey verifiable instructions? | sentence exact, QA EM, keyword coverage/all | higher is better |
+| Does it rank the chosen answer above the rejected one? | preference accuracy and margin, DPO loss | higher accuracy/margin and lower loss are better, but only for that preference set |
+| Is generated text mechanically healthy? | repetition, distinct-n, ending rate, length | inspect separately; none proves semantic quality |
+| Does one output look better to a reader? | fixed prompts, raw samples, randomized blind A/B | qualitative evidence, ideally judged independently |
 
 ```bash
 python eval/comprehensive_eval.py \
@@ -162,11 +191,12 @@ greedy top-1 decoding. These are separate metrics, not a combined score.
 | DPOv2 (step 200) | 5.82 | **0.715** | 0.845 | 0.044 |
 | RSFT | 5.88 | 0.605 | 0.845 | **0.048** |
 
-The main positive result is narrow instruction learning from task-structured
-SFT. DPO-v2 improves exact sentence control with little PPL regression, while
-DPO-v1 demonstrates that stronger preference ranking can coincide with worse
-external metrics. Keyword-all success remains low and is reported as an open
-failure, not hidden behind average coverage.
+The main practical observation is that a small model without broad world
+knowledge can still learn a **limited, structured instruction protocol** when
+the tasks and answers are carefully constructed. This is a result of the
+experiment, not a claim of general instruction following. DPO-v2 improves exact
+sentence control with little PPL regression, while DPO-v1 demonstrates that
+stronger preference ranking can coincide with worse external metrics.
 
 ## Side-by-side demo
 
@@ -200,7 +230,8 @@ and the comprehensive evaluator.
 
 ## Scope
 
-This repository demonstrates a complete, resource-constrained research loop.
-It does not claim general knowledge, robust semantic story judging, or
-state-of-the-art benchmark performance. The strongest conclusion concerns
-narrow instruction following under controlled data and compute.
+This is an educational, resource-constrained implementation project. It does
+not claim general knowledge, robust semantic story judging, or state-of-the-art
+benchmark performance. Its strongest result is that the complete pipeline can
+be made observable on consumer hardware, with narrow instruction learning as a
+useful controlled experiment.

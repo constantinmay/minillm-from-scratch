@@ -2,11 +2,21 @@
 
 [简体中文](README.md) | [English](README_en.md)
 
-这是一套以 notebook 为主体的七章教程。每个知识点遵循同一节奏：
+这是一套以 notebook 为主体的七章教程，目标是在有限资源上亲手走完 MiniLLM 的完整训练 pipeline。大型模型训练通常离初学者很远，但缩小模型与数据后，我们仍然可以观察“随机输出怎样开始具有语法”“Base 与 SFT 分别学到了什么”“偏好指标为什么可能误导”等关键现象。
+
+每个知识点遵循同一节奏：
 
 > 直觉说明 → 公式推导 → 符号解释 → 对应项目代码 → 可运行验证
 
 教程实验不需要 GPU。耗时训练命令只放在 Markdown 代码块中，不会因为“全部运行”而意外启动。
+
+完成教程后，你应该能够达到三个里程碑：
+
+1. 从公式和代码两侧解释 next-token prediction；
+2. 独立训练 Base，并用 loss、PPL 和生成样例判断它是否开始学会基本语法；
+3. 解释 SFT 为什么能教授有限任务协议，以及为什么 DPO/RSFT 必须同时看外部评测。
+
+第 01–04 章是主线；第 05 章的 DPO/RSFT 属于进阶扩展，不影响先跑通 Base 与 SFT。
 
 ## 开始前需要什么基础？
 
@@ -44,8 +54,8 @@ jupyter lab
 | 03 | 稳定的预训练循环如何工作？ | 45–60 分钟 | [打开](notebooks/03_pretraining.ipynb) | [Open](notebooks_en/03_pretraining.ipynb) |
 | 04 | Response-only SFT 如何教会小模型有限任务协议？ | 45–60 分钟 | [打开](notebooks/04_sft.ipynb) | [Open](notebooks_en/04_sft.ipynb) |
 | 05 | DPO 如何推导，偏好数据和 RSFT 如何构建？ | 60–90 分钟 | [打开](notebooks/05_alignment.ipynb) | [Open](notebooks_en/05_alignment.ipynb) |
-| 06 | 不同评测指标分别回答什么问题？ | 45–60 分钟 | [打开](notebooks/06_evaluation.ipynb) | [Open](notebooks_en/06_evaluation.ipynb) |
-| 07 | 如何复现、解释并扩展整个实验？ | 30–45 分钟 | [打开](notebooks/07_reproduce.ipynb) | [Open](notebooks_en/07_reproduce.ipynb) |
+| 06 | 不同评测指标分别回答什么实践问题？ | 45–60 分钟 | [打开](notebooks/06_evaluation.ipynb) | [Open](notebooks_en/06_evaluation.ipynb) |
+| 07 | 如何复现、解释并扩展整个训练流程？ | 30–45 分钟 | [打开](notebooks/07_reproduce.ipynb) | [Open](notebooks_en/07_reproduce.ipynb) |
 
 推荐顺序是 `01 → 02 → 03 → 04 → 05 → 06 → 07`。已经熟悉 Transformer 的读者可以从第 04 章开始，但仍建议先运行第 01 章的标签移位验证。
 
@@ -60,7 +70,7 @@ jupyter lab
 完成 01–06 章后，用第 07 章配合以下资料：
 
 - [项目中文 README](../../README_zh.md)：完整训练和评测命令；
-- [正式实验报告](../experiment_report.md)：协议、结果和限制；
+- [训练与评测报告](../experiment_report.md)：协议、结果和限制；
 - [论文与代码映射](../../papers/references_and_analysis.md)：原始论文和实现对应关系。
 
 ## 每章应该怎么学？
