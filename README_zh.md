@@ -2,9 +2,21 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
+[![CPU tests](https://github.com/constantinmay/minillm-from-scratch/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/constantinmay/minillm-from-scratch/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
+[![当前稳定版本：v1.1.0](https://img.shields.io/badge/stable-v1.1.0-green.svg)](https://github.com/constantinmay/minillm-from-scratch/tree/v1.1.0)
+
 > **第一次学习语言模型？** 请从[中文初学者教程](docs/tutorial/README.md)开始。七章 notebook 将说明、公式推导、源码链接和可运行验证交错排列；教学实验只需要 CPU。
 
 这是一个面向初学者和有限算力的语言模型实践项目：不只阅读公式或调用现成 API，而是从零实现并亲手跑通 tokenizer、decoder-only Transformer、Base 预训练、指令 SFT、偏好对齐、文本生成与评测。参考模型只有 17.23M 参数，使用单张 8GB RTX 4060 Laptop GPU 和原生 PyTorch 训练，不依赖 Hugging Face Transformers。
+
+## 选择使用路径
+
+- **学习原理：** 直接运行中英文教程，不需要 GPU 或预训练 checkpoint。
+- **体验模型：** 从 GitHub Release 下载 tokenizer 和推理 checkpoint，然后运行
+  `demo_compare.py`。**Release 资产将在下一版本发布，目前尚未发布。**
+- **完整复现：** 准备 TinyStories，并依次完成 tokenizer、预训练、SFT 和偏好优化。
 
 ## 为什么做这个项目？
 
@@ -66,6 +78,45 @@ pip install -r requirements.txt
 ```
 
 训练环境为 8GB RTX 4060 Laptop GPU。测试、教程和小规模推理支持 CPU。
+
+## 可复现性与实验可靠性
+
+- 正式训练配置显式设置 `seed`；Python、NumPy、PyTorch、CUDA 和 DataLoader
+  shuffle 使用同一个配置种子。
+- SFT、DPO 和预训练 resume 缺少必要 checkpoint 时会 fail fast，不会静默使用随机权重。
+- checkpoint v2 保存模型、optimizer、scheduler、GradScaler、RNG、训练配置和
+  DataLoader 进度；legacy checkpoint 仍然可以加载。
+- 单进程预训练 resume 会恢复到下一个 shuffle batch；tiny CPU 回归测试验证下一
+  batch、loss 和模型参数。
+- GitHub Actions 使用 CPU-only PyTorch 运行完整测试。
+
+固定 seed 能提高同一环境内的可重复性，但不代表不同硬件或 PyTorch/CUDA 版本间
+逐位一致。当前不保证多 GPU/DDP 或跨硬件 bitwise reproducibility。
+
+### DPO response log-prob reduction
+
+已有正式 DPO 实验使用 token-wise `mean`。`sum` 只作为未来消融实验接口；项目不
+宣称其中一种一定更好。可以在 DPO 配置中显式选择：
+
+```yaml
+logprob_reduction: mean  # 或：sum
+```
+
+切换接口不会改写已有实验报告和结果。
+
+### Bootstrap 置信区间
+
+综合评测可以选择在 held-out prompts 上执行样本级重采样：
+
+```bash
+python eval/comprehensive_eval.py \
+  --model Base=checkpoints/base.pt \
+  --bootstrap-samples 1000 \
+  --bootstrap-seed 42
+```
+
+区间表示当前测试集上的采样不确定性，不是跨数据集或跨领域泛化保证。同一个
+greedy-decoded prompt 的多个任务标签不会被当作相互独立的统计样本。
 
 ## 复现训练流水线
 
@@ -170,7 +221,9 @@ python demo_compare.py --task qa \
 pytest tests -q
 ```
 
-测试覆盖因果 mask、张量形状、移位标签、prompt mask、生成、任务规则、无泄漏数据构建、严格 DPO 导出、统一评测器以及中英文教程 notebook。
+当前 80 项测试覆盖因果 mask、张量形状、移位标签、prompt mask、生成、任务规则、
+无泄漏数据构建、严格 DPO 导出、checkpoint 恢复、推理导出、对比 demo、统一评测器
+以及中英文教程 notebook。
 
 ## 文档
 
@@ -179,8 +232,15 @@ pytest tests -q
 - [文档索引](docs/README.md)
 - [理论与公式](docs/theory.md)
 - [实验报告](docs/experiment_report.md)
+- [模型卡](MODEL_CARD.md)
+- [发布指南](docs/release.md)
+- [下一版本发布说明](RELEASE_NOTES.md)
 - [论文与实现映射](papers/references_and_analysis.md)
 
 ## 边界
 
 本仓库是一个面向有限资源的教学与实践项目，展示如何在消费级显卡上真正跑通并观察完整训练流程。它不声称具备通用知识、可靠的开放故事语义判断或 SOTA benchmark 表现；窄域指令学习只是这条实践流水线中的一个受控实验结果。
+
+## 许可证
+
+本项目使用 [MIT License](LICENSE)。
